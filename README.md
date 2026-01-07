@@ -6,7 +6,8 @@ AI 驱动的旅行规划助手 - 使用通义千问 LLM 生成个性化的旅行
 ![FastAPI](https://img.shields.io/badge/FastAPI-latest-green)
 
 ## ✨ 核心功能
-- 🤖 **AI 智能规划**：基于通义千问大模型，根据目的地、天数、预算和偏好生成详细行程。
+- 🤖 **AI 智能规划**：支持 **本地 Ollama (免费)** 或 **阿里云通义千问** 大模型，根据目的地、天数、预算和偏好生成详细行程。
+- 💰 **极致省钱**：默认配置直接调用本地算力，无需支付昂贵的 API 费用。
 - 👤 **用户系统**：完整的注册登录流程，基于 JWT 的身份认证，支持历史行程管理。
 - 🖼️ **真实图片**：集成 Unsplash/Pexels API，自动匹配并展示景点的真实照片。
 - 📱 **响应式设计**：使用 Tailwind CSS 构建，完美适配桌面端和移动端。
@@ -29,13 +30,30 @@ AI 驱动的旅行规划助手 - 使用通义千问 LLM 生成个性化的旅行
 ### 1. 环境准备
 - Node.js 18+
 - Python 3.12+
-- 通义千问 API Key ([申请地址](https://dashscope.aliyuncs.com/))
+- **本地运行 (免费/推荐)**: 
+    - 下载并安装 [Ollama](https://ollama.com/)
+    - 运行模型: `ollama run qwen3:8b` (或其他兼容模型)
+- **云端运行 (可选)**: 
+    - 通义千问 API Key ([申请地址](https://dashscope.aliyuncs.com/))
 
 ### 2. 配置环境变量
 在 `backend/` 目录下创建 `.env` 文件：
+
+**方案 A: 使用本地 Ollama (默认/免费)**
+无需特殊配置，系统默认连接 `http://localhost:11434`。
+确保 Ollama 正在后台运行即可。
+
+**方案 B: 使用云端 API (Aliyun/OpenAI)**
 ```env
+# 覆盖默认的本地配置
 LLM_API_KEY=your_dashscope_api_key
-# 推荐配置，用于显示景点图片
+LLM_OPENAI_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL_NAME=qwen-plus
+```
+
+**通用配置 (可选)**:
+```env
+# 推荐配置，用于显示景点图片（Unsplash 或 Pexels）
 UNSPLASH_ACCESS_KEY=your_unsplash_access_key
 ```
 

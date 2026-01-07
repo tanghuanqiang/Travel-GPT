@@ -30,10 +30,10 @@ class TravelPlanningAgent:
     
     def __init__(self):
         # 使用 Qwen (通义千问) via OpenAI 兼容接口
-        # 参考 SubsAI 的配置
-        api_key = os.getenv("LLM_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
-        base_url = os.getenv("LLM_OPENAI_BASE", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-        model_name = os.getenv("LLM_MODEL_NAME", "qwen-plus")
+        # 改为默认使用本地 Ollama (qwen3:8b)
+        api_key = os.getenv("LLM_API_KEY", "ollama") # Ollama keys are not strictly checked, but cannot be empty
+        base_url = os.getenv("LLM_OPENAI_BASE", "http://localhost:11434/v1")
+        model_name = os.getenv("LLM_MODEL_NAME", "qwen3:8b")
 
         self.llm = ChatOpenAI(
             model=model_name,

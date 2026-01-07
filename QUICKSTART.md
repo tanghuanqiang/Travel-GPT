@@ -9,20 +9,25 @@ git clone https://github.com/yourusername/Travel-GPT.git
 cd Travel-GPT
 ```
 
-### 第二步：配置API密钥
+### 第二步：配置 LLM 模型
 
-```bash
-# 复制环境变量模板
-cd backend
-cp .env.example .env
-```
+#### 选项 A：使用本地 Ollama (完全免费 - 推荐 🔥)
+1. 下载安装 [Ollama](https://ollama.com/)
+2. 打开终端运行模型：
+   ```bash
+   ollama run qwen3:8b
+   ```
+3. **完成！** 无需修改任何配置，项目默认连接本地。
 
-编辑 `backend/.env`，至少需要添加：
+#### 选项 B：使用云端 API (无需高性能显卡)
+编辑 `backend/.env`，添加云服务商配置（以 Aliyun 为例）：
 ```env
-OPENAI_API_KEY=sk-your-key-here
+LLM_API_KEY=sk-your-key-here
+LLM_OPENAI_BASE=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL_NAME=qwen-plus
 ```
 
-💡 **获取OpenAI Key**: https://platform.openai.com/api-keys
+💡 **获取 Aliyun Key**: https://dashscope.console.aliyun.com/
 
 ### 第三步：启动项目
 
