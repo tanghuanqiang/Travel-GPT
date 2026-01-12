@@ -154,7 +154,8 @@ export default function PlanPage() {
         headers['Authorization'] = `Bearer ${token}`
       }
       
-      const response = await axios.post('http://localhost:8000/api/generate-plan', formData, { headers })
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:18890'
+      const response = await axios.post(`${apiUrl}/api/generate-plan`, formData, { headers })
       setPlanData(response.data)
       setIsRunning(false)
       setIsFinalizing(false)
@@ -184,7 +185,8 @@ export default function PlanPage() {
           }
           
           // 创建临时分享链接
-          const shareResponse = await axios.post('http://localhost:8000/api/share/temporary', {
+          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:18890'
+          const shareResponse = await axios.post(`${apiUrl}/api/share/temporary`, {
             itinerary_data: shareDataToSend,
             expires_days: 7
           })

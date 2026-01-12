@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # 后端API服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: travel-gpt-backend
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-18890}:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - WORKERS=1
+      # 从.env文件读取其他环境变量
+      - SECRET_KEY=${SECRET_KEY}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///./travel_gpt.db}
+      - LLM_PROVIDER=${LLM_PROVIDER:-nvidia}
+      - DASHSCOPE_API_KEY=${DASHSCOPE_API_KEY:-}
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - NVIDIA_MODEL=${NVIDIA_MODEL:-z-ai/glm4.7}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://localhost:11434}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen3:8b}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_OPENAI_BASE=${LLM_OPENAI_BASE:-}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-}
+      - UNSPLASH_ACCESS_KEY=${UNSPLASH_ACCESS_KEY:-}
+      - PEXELS_API_KEY=${PEXELS_API_KEY:-}
+      - OPENWEATHER_API_KEY=${OPENWEATHER_API_KEY:-}
+      - TAVILY_API_KEY=${TAVILY_API_KEY:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:18891,http://localhost:3000,http://127.0.0.1:3000}
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - FROM_EMAIL=${FROM_EMAIL:-}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASSWORD=${SMTP_PASSWORD:-}
+      - DEFAULT_EMAIL_ACCOUNT=${DEFAULT_EMAIL_ACCOUNT:-}
+      - DEFAULT_EMAIL_PASSWORD=${DEFAULT_EMAIL_PASSWORD:-}
+    volumes:
+      - ./backend/data:/app/data
+      - ./backend/logs:/app/logs
+    networks:
+      - travel-gpt-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 前端Web服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # 构建时使用外部访问地址（用户浏览器访问的地址）
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:18890}
+    container_name: travel-gpt-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-18891}:3000"
+    environment:
+      # 运行时环境变量（Next.js 的 NEXT_PUBLIC_ 变量在构建时已确定，这里主要用于其他用途）
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:18890}
+    networks:
+      - travel-gpt-network
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  travel-gpt-network:
+    driver: bridge

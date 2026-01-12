@@ -84,7 +84,8 @@ export default function HistoryPage() {
       params.sort_by = sortBy
       params.sort_order = sortOrder
       
-      const response = await axios.get("http://localhost:8000/api/history", {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:18890'
+      const response = await axios.get(`${apiUrl}/api/history`, {
         headers: {
           Authorization: `Bearer ${token}`
         },
@@ -120,7 +121,8 @@ export default function HistoryPage() {
 
   const viewItinerary = async (id: number) => {
     try {
-      const response = await axios.get(`http://localhost:8000/api/history/${id}`, {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:18890'
+      const response = await axios.get(`${apiUrl}/api/history/${id}`, {
         headers: {
           Authorization: `Bearer ${token}`
         }
@@ -137,7 +139,8 @@ export default function HistoryPage() {
     if (!confirm("确定要删除这条历史记录吗？")) return
 
     try {
-      await axios.delete(`http://localhost:8000/api/history/${id}`, {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:18890'
+      await axios.delete(`${apiUrl}/api/history/${id}`, {
         headers: {
           Authorization: `Bearer ${token}`
         }

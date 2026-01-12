@@ -166,7 +166,8 @@ export default function ResultPage() {
         setItineraryId(id)
         
         // 从API获取行程详情
-        const response = await axios.get(`http://localhost:8000/api/history/${id}`, {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:18890'
+        const response = await axios.get(`${apiUrl}/api/history/${id}`, {
           headers: { Authorization: `Bearer ${token}` }
         })
         

@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'standalone', // 启用 standalone 模式以支持 Docker 部署
   images: {
     // 配置允许的图片域名（仅支持真实图片API）
     domains: [

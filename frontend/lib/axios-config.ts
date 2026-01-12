@@ -6,7 +6,7 @@ import axios from 'axios'
 
 // 创建 axios 实例
 const api = axios.create({
-  baseURL: 'http://localhost:8000',
+  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:18890',
   timeout: 90000, // 90秒超时
 })
 
