@@ -37,6 +37,8 @@ interface DailyPlan {
 }
 
 interface ItineraryData {
+  destination?: string  // 可选：目的地
+  days?: number  // 可选：天数
   overview: {
     totalBudget: number
     budgetBreakdown: {

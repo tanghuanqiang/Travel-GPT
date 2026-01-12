@@ -55,6 +55,8 @@ interface DailyPlan {
 }
 
 interface ItineraryData {
+  destination?: string  // 可选：目的地
+  days?: number  // 可选：天数
   overview: {
     totalBudget: number
     budgetBreakdown: {
@@ -283,7 +285,7 @@ export default function ResultPage() {
         
         // 从localStorage获取原始请求参数，包含destination和days
         const travelPlan = localStorage.getItem('travelPlan')
-        let shareDataToSend = { ...itinerary }
+        let shareDataToSend: ItineraryData & { destination?: string; days?: number } = { ...itinerary }
         
         if (travelPlan) {
           try {
