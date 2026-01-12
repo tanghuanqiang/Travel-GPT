@@ -1,5 +1,5 @@
-from fastapi import FastAPI, HTTPException, Request, Depends
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request, Depends, status
+from fastapi.responses import JSONResponse, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
@@ -9,6 +9,8 @@ import uvicorn
 from dotenv import load_dotenv
 import json
 import logging
+import secrets
+from datetime import datetime, timedelta
 
 # 配置日志
 logging.basicConfig(
@@ -22,14 +24,19 @@ logger = logging.getLogger(__name__)
 
 from app.agent import TravelPlanningAgent
 from app.models import TravelRequest, TravelItinerary
-from app.database import get_db, engine, Base
-from app.db_models import User, Itinerary
+from app.database import get_db, engine, Base, settings
+from app.db_models import User, Itinerary, EmailVerification, ShareLink, Favorite, TemporaryShare
 from app.auth import (
     get_password_hash, 
     verify_password, 
     create_access_token,
     get_current_user,
-    get_current_user_optional
+    get_current_user_optional,
+    get_user_by_email,
+    create_verification_code,
+    verify_verification_code,
+    create_reset_password_code,
+    update_user_password
 )
 
 # Load environment variables
@@ -68,6 +75,39 @@ class UserResponse(BaseModel):
     email: str
     created_at: str
 
+class VerificationRequest(BaseModel):
+    email: str
+
+class VerificationCodeVerify(BaseModel):
+    email: str
+    code: str
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
+
+class UpdatePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+class CreateShareLinkRequest(BaseModel):
+    is_public: bool = True
+    expires_days: Optional[int] = None  # None表示永久有效
+
+class CreateTemporaryShareRequest(BaseModel):
+    itinerary_data: dict  # 完整的行程数据
+    expires_days: int = 7  # 临时分享默认7天过期
+
+class UpdateItineraryRequest(BaseModel):
+    agent_name: Optional[str] = None
+    destination: Optional[str] = None
+    days: Optional[int] = None
+    budget: Optional[str] = None
+    travelers: Optional[int] = None
+    preferences: Optional[List[str]] = None
+    extra_requirements: Optional[str] = None
+
 class ItineraryResponse(BaseModel):
     id: int
     destination: str
@@ -76,9 +116,10 @@ class ItineraryResponse(BaseModel):
     itinerary_data: dict
 
 # CORS middleware - 必须在定义路由之前添加
+cors_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -113,14 +154,67 @@ async def test_cors():
 
 
 # ============ Auth Endpoints ============
+@app.post("/api/auth/send-verification-code")
+async def send_verification_code(
+    request: VerificationRequest,
+    db: Session = Depends(get_db)
+):
+    """发送注册验证码到邮箱"""
+    # 检查邮箱是否已注册
+    existing_user = get_user_by_email(db, request.email)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="该邮箱已被注册"
+        )
+    
+    # 创建并发送验证码
+    try:
+        create_verification_code(db, request.email)
+        return {"message": "验证码已发送，请查收邮箱"}
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"发送验证码失败: {str(e)}"
+        )
+
+
+@app.post("/api/auth/verify-code")
+async def verify_code(
+    request: VerificationCodeVerify,
+    db: Session = Depends(get_db)
+):
+    """验证邮箱验证码"""
+    # 检查邮箱是否已注册
+    existing_user = get_user_by_email(db, request.email)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="该邮箱已被注册"
+        )
+    
+    # 验证验证码
+    is_valid = verify_verification_code(db, request.email, request.code)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="验证码无效或已过期"
+        )
+    
+    return {"message": "验证成功"}
+
+
 @app.post("/api/auth/register", response_model=TokenResponse)
 async def register(user_data: UserRegister, db: Session = Depends(get_db)):
-    """用户注册"""
+    """用户注册（需要先验证邮箱验证码）"""
     try:
         # 检查邮箱是否已存在
-        existing_user = db.query(User).filter(User.email == user_data.email).first()
+        existing_user = get_user_by_email(db, user_data.email)
         if existing_user:
             raise HTTPException(status_code=400, detail="该邮箱已被注册")
+        
+        # 注意：邮箱验证应该在注册前完成（通过 /verify-code 接口）
+        # 验证码在验证成功后会从数据库删除，所以这里不再检查
         
         # 创建新用户
         hashed_password = get_password_hash(user_data.password)
@@ -185,6 +279,122 @@ async def get_current_user_info(current_user: User = Depends(get_current_user)):
         "email": current_user.email,
         "created_at": str(current_user.created_at)
     }
+
+
+@app.put("/api/auth/me/password")
+async def update_password(
+    request: UpdatePasswordRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """修改密码"""
+    if len(request.new_password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="新密码长度至少6位"
+        )
+    
+    # 验证旧密码
+    if not verify_password(request.old_password, current_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="旧密码错误"
+        )
+    
+    # 更新密码
+    current_user.hashed_password = get_password_hash(request.new_password)
+    db.commit()
+    db.refresh(current_user)
+    
+    return {"message": "密码修改成功"}
+
+
+@app.delete("/api/auth/me")
+async def delete_account(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """注销账号（删除账号及关联数据）"""
+    try:
+        # 删除用户（关联的行程会自动删除，因为设置了cascade="all, delete-orphan"）
+        db.delete(current_user)
+        db.commit()
+        return {"message": "账号已成功注销"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"注销账号失败: {str(e)}"
+        )
+
+
+@app.post("/api/auth/send-reset-password-code")
+async def send_reset_password_code(
+    request: VerificationRequest,
+    db: Session = Depends(get_db)
+):
+    """发送重置密码验证码"""
+    try:
+        create_reset_password_code(db, request.email)
+        return {"message": "重置密码验证码已发送，请查收邮箱"}
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"发送验证码失败: {str(e)}"
+        )
+
+
+@app.post("/api/auth/verify-reset-password-code")
+async def verify_reset_password_code(
+    request: VerificationCodeVerify,
+    db: Session = Depends(get_db)
+):
+    """验证重置密码验证码"""
+    is_valid = verify_verification_code(db, request.email, request.code)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="验证码无效或已过期"
+        )
+    
+    return {"message": "验证成功"}
+
+
+@app.post("/api/auth/reset-password", response_model=TokenResponse)
+async def reset_password(
+    request: ResetPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """重置用户密码"""
+    # 验证验证码
+    is_valid = verify_verification_code(db, request.email, request.code)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="验证码无效或已过期"
+        )
+    
+    # 重置密码
+    try:
+        user = update_user_password(db, request.email, request.new_password)
+        # 生成 access token 用于自动登录
+        access_token = create_access_token(data={"sub": str(user.id)})
+        return {
+            "access_token": access_token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id,
+                "email": user.email,
+                "created_at": str(user.created_at)
+            }
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"重置密码失败: {str(e)}"
+        )
 
 
 @app.get("/api/test")
@@ -257,36 +467,114 @@ async def get_user_history(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
     limit: int = 20,
-    offset: int = 0
+    offset: int = 0,
+    search: Optional[str] = None,  # 搜索关键词（目的地、行程名称）
+    sort_by: Optional[str] = "created_at",  # 排序字段：created_at, total_budget, days
+    sort_order: Optional[str] = "desc",  # 排序顺序：asc, desc
+    min_days: Optional[int] = None,  # 最小天数
+    max_days: Optional[int] = None,  # 最大天数
+    min_budget: Optional[float] = None,  # 最小预算
+    max_budget: Optional[float] = None  # 最大预算
 ):
-    """获取用户的历史行程记录"""
+    """获取用户的历史行程记录（支持搜索、筛选、排序）"""
     try:
-        itineraries = db.query(Itinerary)\
-            .filter(Itinerary.user_id == current_user.id)\
-            .order_by(Itinerary.created_at.desc())\
-            .limit(limit)\
-            .offset(offset)\
-            .all()
+        query = db.query(Itinerary).filter(Itinerary.user_id == current_user.id)
         
-        total = db.query(Itinerary).filter(Itinerary.user_id == current_user.id).count()
+        # 搜索功能：按目的地或行程名称搜索
+        if search:
+            search_pattern = f"%{search}%"
+            query = query.filter(
+                (Itinerary.destination.like(search_pattern)) |
+                (Itinerary.agent_name.like(search_pattern))
+            )
+        
+        # 筛选功能：按天数范围
+        if min_days is not None:
+            query = query.filter(Itinerary.days >= min_days)
+        if max_days is not None:
+            query = query.filter(Itinerary.days <= max_days)
+        
+        # 筛选功能：按预算范围
+        if min_budget is not None:
+            query = query.filter(Itinerary.total_budget >= min_budget)
+        if max_budget is not None:
+            query = query.filter(Itinerary.total_budget <= max_budget)
+        
+        # 获取所有符合条件的行程（不分页，用于排序）
+        all_itineraries = query.all()
+        
+        # 获取所有行程ID
+        itinerary_ids = [item.id for item in all_itineraries]
+        
+        # 批量查询收藏状态
+        favorites = db.query(Favorite).filter(
+            Favorite.user_id == current_user.id,
+            Favorite.itinerary_id.in_(itinerary_ids)
+        ).all()
+        
+        # 创建收藏状态映射
+        favorited_ids = {fav.itinerary_id for fav in favorites}
+        
+        # 构建响应，包含收藏状态
+        items = []
+        for item in all_itineraries:
+            is_favorited = item.id in favorited_ids
+            # 获取排序字段的值
+            sort_value = None
+            if sort_by == "created_at":
+                sort_value = item.created_at.timestamp() if item.created_at else 0
+            elif sort_by == "total_budget":
+                sort_value = item.total_budget if item.total_budget else 0
+            elif sort_by == "days":
+                sort_value = item.days if item.days else 0
+            else:
+                sort_value = item.created_at.timestamp() if item.created_at else 0
+            
+            items.append({
+                "id": item.id,
+                "destination": item.destination,
+                "days": item.days,
+                "budget": item.budget,
+                "created_at": str(item.created_at),
+                "is_favorited": is_favorited,
+                "_sort_value": sort_value,  # 临时字段用于排序
+                "preview": {
+                    "agentName": item.agent_name,
+                    "travelers": item.travelers,
+                    "totalBudget": item.total_budget
+                }
+            })
+        
+        # 排序：收藏的优先，然后在每个组内按指定字段排序
+        # 排序键：(not is_favorited, sort_value)
+        # is_favorited=True时，not is_favorited=False，会排在前面（False < True）
+        # 对于sort_value，如果sort_order是desc，需要反转，所以使用负值
+        reverse_sort = (sort_order == "desc")
+        for item in items:
+            sort_value = item["_sort_value"]
+            if reverse_sort:
+                # 对于降序，使用负值，这样排序时小的（负的大值）会排在前面
+                item["_sort_key"] = (not item["is_favorited"], -sort_value)
+            else:
+                # 对于升序，直接使用原值
+                item["_sort_key"] = (not item["is_favorited"], sort_value)
+        
+        items.sort(key=lambda x: x["_sort_key"])
+        
+        # 移除临时排序字段
+        for item in items:
+            del item["_sort_value"]
+            del item["_sort_key"]
+        
+        # 获取总数
+        total = len(items)
+        
+        # 分页
+        paginated_items = items[offset:offset + limit]
         
         return {
             "total": total,
-            "items": [
-                {
-                    "id": item.id,
-                    "destination": item.destination,
-                    "days": item.days,
-                    "budget": item.budget,
-                    "created_at": str(item.created_at),
-                    "preview": {
-                        "agentName": item.agent_name,
-                        "travelers": item.travelers,
-                        "totalBudget": item.total_budget
-                    }
-                }
-                for item in itineraries
-            ]
+            "items": paginated_items
         }
     except Exception as e:
         print(f"Error fetching history: {e}")
@@ -322,6 +610,110 @@ async def get_itinerary_detail(
     }
 
 
+@app.put("/api/itinerary/{itinerary_id}")
+async def update_itinerary(
+    itinerary_id: int,
+    request: UpdateItineraryRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """更新行程基本信息（仅更新请求参数，不重新生成行程）"""
+    itinerary = db.query(Itinerary).filter(
+        Itinerary.id == itinerary_id,
+        Itinerary.user_id == current_user.id
+    ).first()
+    
+    if not itinerary:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="行程不存在或无权限访问"
+        )
+    
+    # 更新字段
+    if request.agent_name is not None:
+        itinerary.agent_name = request.agent_name
+    if request.destination is not None:
+        itinerary.destination = request.destination
+    if request.days is not None:
+        itinerary.days = request.days
+    if request.budget is not None:
+        itinerary.budget = request.budget
+    if request.travelers is not None:
+        itinerary.travelers = request.travelers
+    if request.preferences is not None:
+        itinerary.preferences = json.dumps(request.preferences, ensure_ascii=False)
+    if request.extra_requirements is not None:
+        itinerary.extra_requirements = request.extra_requirements
+    
+    db.commit()
+    db.refresh(itinerary)
+    
+    return {
+        "id": itinerary.id,
+        "destination": itinerary.destination,
+        "days": itinerary.days,
+        "message": "行程信息已更新"
+    }
+
+
+@app.post("/api/itinerary/{itinerary_id}/regenerate")
+async def regenerate_itinerary(
+    itinerary_id: int,
+    request: Optional[TravelRequest] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """重新生成行程（基于现有行程或新的请求参数）"""
+    itinerary = db.query(Itinerary).filter(
+        Itinerary.id == itinerary_id,
+        Itinerary.user_id == current_user.id
+    ).first()
+    
+    if not itinerary:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="行程不存在或无权限访问"
+        )
+    
+    try:
+        # 如果没有提供新的请求参数，使用现有行程的参数
+        if request is None:
+            request = TravelRequest(
+                agentName=itinerary.agent_name or "我的周末旅行",
+                destination=itinerary.destination,
+                days=itinerary.days,
+                budget=itinerary.budget or "",
+                travelers=itinerary.travelers or 2,
+                preferences=json.loads(itinerary.preferences) if itinerary.preferences else [],
+                extraRequirements=itinerary.extra_requirements or ""
+            )
+        
+        # 重新生成行程
+        new_itinerary = await travel_agent.generate_itinerary(request)
+        
+        # 更新数据库中的行程数据
+        itinerary.agent_name = request.agentName
+        itinerary.destination = request.destination
+        itinerary.days = request.days
+        itinerary.budget = request.budget
+        itinerary.travelers = request.travelers
+        itinerary.preferences = json.dumps(request.preferences, ensure_ascii=False)
+        itinerary.extra_requirements = request.extraRequirements
+        itinerary.itinerary_data = new_itinerary.model_dump_json()
+        itinerary.total_budget = new_itinerary.overview.totalBudget if new_itinerary.overview else None
+        
+        db.commit()
+        db.refresh(itinerary)
+        
+        return new_itinerary
+    except Exception as e:
+        logger.error(f"重新生成行程失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"重新生成行程失败: {str(e)}"
+        )
+
+
 @app.delete("/api/history/{itinerary_id}")
 async def delete_itinerary(
     itinerary_id: int,
@@ -340,6 +732,360 @@ async def delete_itinerary(
     db.commit()
     
     return {"message": "删除成功"}
+
+
+# ============ Export Endpoints ============
+@app.get("/api/itinerary/{itinerary_id}/export/pdf")
+async def export_itinerary_pdf(
+    itinerary_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """导出行程为PDF"""
+    # 获取行程
+    itinerary = db.query(Itinerary).filter(
+        Itinerary.id == itinerary_id,
+        Itinerary.user_id == current_user.id
+    ).first()
+    
+    if not itinerary:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="行程不存在或无权限访问"
+        )
+    
+    try:
+        # 解析行程数据
+        itinerary_data = json.loads(itinerary.itinerary_data)
+        
+        # 生成PDF
+        pdf_buffer = generate_pdf(itinerary_data, itinerary.destination, itinerary.days)
+        
+        # 返回PDF文件
+        filename = f"{itinerary.destination}_{itinerary.days}天行程.pdf"
+        return Response(
+            content=pdf_buffer.read(),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+    except Exception as e:
+        logger.error(f"PDF生成失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"PDF生成失败: {str(e)}"
+        )
+
+
+# ============ Share Endpoints ============
+@app.post("/api/itinerary/{itinerary_id}/share")
+async def create_share_link(
+    itinerary_id: int,
+    request: CreateShareLinkRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """创建分享链接"""
+    # 验证行程属于当前用户
+    itinerary = db.query(Itinerary).filter(
+        Itinerary.id == itinerary_id,
+        Itinerary.user_id == current_user.id
+    ).first()
+    
+    if not itinerary:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="行程不存在或无权限访问"
+        )
+    
+    # 检查是否已存在分享链接
+    existing_share = db.query(ShareLink).filter(
+        ShareLink.itinerary_id == itinerary_id
+    ).first()
+    
+    if existing_share:
+        # 更新现有分享链接
+        existing_share.is_public = 1 if request.is_public else 0
+        if request.expires_days:
+            existing_share.expires_at = datetime.utcnow() + timedelta(days=request.expires_days)
+        else:
+            existing_share.expires_at = None
+        db.commit()
+        db.refresh(existing_share)
+        return {
+            "share_token": existing_share.share_token,
+            "share_url": f"/share/{existing_share.share_token}",
+            "is_public": existing_share.is_public == 1,
+            "expires_at": str(existing_share.expires_at) if existing_share.expires_at else None
+        }
+    
+    # 生成唯一的分享token
+    while True:
+        share_token = secrets.token_urlsafe(32)
+        if not db.query(ShareLink).filter(ShareLink.share_token == share_token).first():
+            break
+    
+    # 计算过期时间
+    expires_at = None
+    if request.expires_days:
+        expires_at = datetime.utcnow() + timedelta(days=request.expires_days)
+    
+    # 创建分享链接
+    share_link = ShareLink(
+        itinerary_id=itinerary_id,
+        share_token=share_token,
+        is_public=1 if request.is_public else 0,
+        expires_at=expires_at
+    )
+    db.add(share_link)
+    db.commit()
+    db.refresh(share_link)
+    
+    return {
+        "share_token": share_link.share_token,
+        "share_url": f"/share/{share_link.share_token}",
+        "is_public": share_link.is_public == 1,
+        "expires_at": str(share_link.expires_at) if share_link.expires_at else None
+    }
+
+
+@app.post("/api/share/temporary")
+async def create_temporary_share(
+    request: CreateTemporaryShareRequest,
+    db: Session = Depends(get_db)
+):
+    """创建临时分享链接（用于游客用户）"""
+    # 生成唯一的分享token
+    while True:
+        share_token = secrets.token_urlsafe(32)
+        if not db.query(ShareLink).filter(ShareLink.share_token == share_token).first() and \
+           not db.query(TemporaryShare).filter(TemporaryShare.share_token == share_token).first():
+            break
+    
+    # 计算过期时间
+    expires_at = datetime.utcnow() + timedelta(days=request.expires_days)
+    
+    # 创建临时分享
+    temporary_share = TemporaryShare(
+        share_token=share_token,
+        itinerary_data=json.dumps(request.itinerary_data, ensure_ascii=False),
+        expires_at=expires_at
+    )
+    db.add(temporary_share)
+    db.commit()
+    db.refresh(temporary_share)
+    
+    return {
+        "share_token": temporary_share.share_token,
+        "share_url": f"/share/{temporary_share.share_token}",
+        "expires_at": str(temporary_share.expires_at)
+    }
+
+
+@app.get("/api/share/{share_token}")
+async def get_shared_itinerary(
+    share_token: str,
+    db: Session = Depends(get_db)
+):
+    """获取分享的行程（无需登录，支持永久分享和临时分享）"""
+    # 先尝试查找永久分享
+    share_link = db.query(ShareLink).filter(ShareLink.share_token == share_token).first()
+    
+    if share_link:
+        # 检查是否过期
+        if share_link.expires_at and datetime.utcnow() > share_link.expires_at:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="分享链接已过期"
+            )
+        
+        # 获取行程
+        itinerary = db.query(Itinerary).filter(Itinerary.id == share_link.itinerary_id).first()
+        
+        if not itinerary:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="行程不存在"
+            )
+        
+        # 解析行程数据
+        itinerary_data = json.loads(itinerary.itinerary_data)
+        
+        return {
+            "id": itinerary.id,
+            "destination": itinerary.destination,
+            "days": itinerary.days,
+            "created_at": str(itinerary.created_at),
+            "itinerary_data": itinerary_data,
+            "share_info": {
+                "is_public": share_link.is_public == 1,
+                "expires_at": str(share_link.expires_at) if share_link.expires_at else None,
+                "is_temporary": False
+            }
+        }
+    
+    # 尝试查找临时分享
+    temporary_share = db.query(TemporaryShare).filter(TemporaryShare.share_token == share_token).first()
+    
+    if temporary_share:
+        # 检查是否过期
+        if datetime.utcnow() > temporary_share.expires_at:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="分享链接已过期"
+            )
+        
+        # 解析行程数据
+        itinerary_data = json.loads(temporary_share.itinerary_data)
+        
+        # 从行程数据中提取基本信息
+        # 目的地可能在顶层，也可能在请求参数中（如果前端传递了）
+        destination = itinerary_data.get("destination") or "未知目的地"
+        # 天数从dailyPlans的长度推断
+        days = len(itinerary_data.get("dailyPlans", [])) or 1
+        
+        return {
+            "id": None,
+            "destination": destination,
+            "days": days,
+            "created_at": str(temporary_share.created_at),
+            "itinerary_data": itinerary_data,
+            "share_info": {
+                "is_public": True,
+                "expires_at": str(temporary_share.expires_at),
+                "is_temporary": True
+            }
+        }
+    
+    # 都没找到
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="分享链接不存在"
+    )
+
+
+# ============ Favorite Endpoints ============
+@app.post("/api/favorites/{itinerary_id}")
+async def add_favorite(
+    itinerary_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """收藏行程"""
+    # 验证行程属于当前用户
+    itinerary = db.query(Itinerary).filter(
+        Itinerary.id == itinerary_id,
+        Itinerary.user_id == current_user.id
+    ).first()
+    
+    if not itinerary:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="行程不存在或无权限访问"
+        )
+    
+    # 检查是否已收藏
+    existing = db.query(Favorite).filter(
+        Favorite.user_id == current_user.id,
+        Favorite.itinerary_id == itinerary_id
+    ).first()
+    
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="该行程已收藏"
+        )
+    
+    # 添加收藏
+    favorite = Favorite(
+        user_id=current_user.id,
+        itinerary_id=itinerary_id
+    )
+    db.add(favorite)
+    db.commit()
+    db.refresh(favorite)
+    
+    return {"message": "收藏成功", "favorite_id": favorite.id}
+
+
+@app.delete("/api/favorites/{itinerary_id}")
+async def remove_favorite(
+    itinerary_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """取消收藏"""
+    favorite = db.query(Favorite).filter(
+        Favorite.user_id == current_user.id,
+        Favorite.itinerary_id == itinerary_id
+    ).first()
+    
+    if not favorite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="未收藏该行程"
+        )
+    
+    db.delete(favorite)
+    db.commit()
+    
+    return {"message": "取消收藏成功"}
+
+
+@app.get("/api/favorites")
+async def get_favorites(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    limit: int = 20,
+    offset: int = 0
+):
+    """获取收藏列表"""
+    favorites = db.query(Favorite).filter(
+        Favorite.user_id == current_user.id
+    ).order_by(Favorite.created_at.desc()).limit(limit).offset(offset).all()
+    
+    total = db.query(Favorite).filter(Favorite.user_id == current_user.id).count()
+    
+    # 获取收藏的行程信息
+    items = []
+    for fav in favorites:
+        itinerary = db.query(Itinerary).filter(Itinerary.id == fav.itinerary_id).first()
+        if itinerary:
+            items.append({
+                "id": itinerary.id,
+                "destination": itinerary.destination,
+                "days": itinerary.days,
+                "budget": itinerary.budget,
+                "created_at": str(itinerary.created_at),
+                "favorite_id": fav.id,
+                "favorited_at": str(fav.created_at),
+                "preview": {
+                    "agentName": itinerary.agent_name,
+                    "travelers": itinerary.travelers,
+                    "totalBudget": itinerary.total_budget
+                }
+            })
+    
+    return {
+        "total": total,
+        "items": items
+    }
+
+
+@app.get("/api/favorites/{itinerary_id}/status")
+async def get_favorite_status(
+    itinerary_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """检查行程是否已收藏"""
+    favorite = db.query(Favorite).filter(
+        Favorite.user_id == current_user.id,
+        Favorite.itinerary_id == itinerary_id
+    ).first()
+    
+    return {"is_favorited": favorite is not None}
 
 
 if __name__ == "__main__":

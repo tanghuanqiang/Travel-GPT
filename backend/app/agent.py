@@ -3,6 +3,7 @@ TravelPlanGPT Agent - Core Planning Logic
 """
 import os
 import json
+import logging
 from typing import List, Dict, Any
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain_openai import ChatOpenAI
@@ -23,17 +24,53 @@ from app.tools import (
     get_weather_info
 )
 from app.image_search import get_image_for_activity
+from app.database import settings
+
+logger = logging.getLogger(__name__)
 
 
 class TravelPlanningAgent:
     """AI旅行规划Agent"""
     
     def __init__(self):
-        # 使用 Qwen (通义千问) via OpenAI 兼容接口
-        # 改为默认使用本地 Ollama (qwen3:8b)
-        api_key = os.getenv("LLM_API_KEY", "ollama") # Ollama keys are not strictly checked, but cannot be empty
-        base_url = os.getenv("LLM_OPENAI_BASE", "http://localhost:11434/v1")
-        model_name = os.getenv("LLM_MODEL_NAME", "qwen3:8b")
+        # 优先使用新配置方式，如果未设置则使用旧方式（兼容）
+        provider = settings.LLM_PROVIDER.lower() if settings.LLM_PROVIDER else ""
+        
+        # 检查是否使用旧配置方式
+        if settings.LLM_API_KEY and settings.LLM_OPENAI_BASE:
+            # 使用旧配置方式（兼容原有配置）
+            api_key = settings.LLM_API_KEY
+            base_url = settings.LLM_OPENAI_BASE
+            model_name = settings.LLM_MODEL_NAME or "qwen3:8b"
+            logger.info(f"使用旧配置方式，模型: {model_name}, URL: {base_url}")
+        elif provider == "nvidia":
+            # NVIDIA GLM API
+            if not settings.NVIDIA_API_KEY or settings.NVIDIA_API_KEY == "":
+                raise ValueError("NVIDIA_API_KEY未配置，请在.env文件中设置")
+            api_key = settings.NVIDIA_API_KEY
+            base_url = "https://integrate.api.nvidia.com/v1"
+            model_name = settings.NVIDIA_MODEL
+            logger.info(f"使用NVIDIA GLM API，模型: {model_name}")
+        elif provider == "ollama" or (not provider and not settings.LLM_API_KEY):
+            # 本地Ollama（默认）
+            api_key = "ollama"  # Ollama不需要真正的key
+            base_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"
+            model_name = settings.OLLAMA_MODEL
+            logger.info(f"使用本地Ollama，模型: {model_name}, URL: {base_url}")
+        elif provider == "dashscope":
+            # 阿里云DashScope (OpenAI兼容接口)
+            if not settings.DASHSCOPE_API_KEY or settings.DASHSCOPE_API_KEY == "":
+                raise ValueError("DASHSCOPE_API_KEY未配置，请在.env文件中设置")
+            api_key = settings.DASHSCOPE_API_KEY
+            base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+            model_name = "qwen-plus"
+            logger.info(f"使用阿里云DashScope，模型: {model_name}")
+        else:
+            # 默认使用Ollama
+            api_key = "ollama"
+            base_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"
+            model_name = settings.OLLAMA_MODEL
+            logger.info(f"使用默认配置（本地Ollama），模型: {model_name}, URL: {base_url}")
 
         self.llm = ChatOpenAI(
             model=model_name,

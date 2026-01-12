@@ -18,6 +18,10 @@ interface AuthContextType {
   register: (email: string, password: string) => Promise<void>
   logout: () => void
   isLoading: boolean
+  sendVerificationCode: (email: string) => Promise<void>
+  verifyCode: (email: string, code: string) => Promise<void>
+  sendResetPasswordCode: (email: string) => Promise<void>
+  resetPassword: (email: string, code: string, newPassword: string) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -107,8 +111,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem('user')
   }
 
+  const sendVerificationCode = async (email: string) => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/auth/send-verification-code`, { email })
+    } catch (error: any) {
+      throw new Error(error.response?.data?.detail || '发送验证码失败')
+    }
+  }
+
+  const verifyCode = async (email: string, code: string) => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/auth/verify-code`, { email, code })
+    } catch (error: any) {
+      throw new Error(error.response?.data?.detail || '验证码验证失败')
+    }
+  }
+
+  const sendResetPasswordCode = async (email: string) => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/auth/send-reset-password-code`, { email })
+    } catch (error: any) {
+      throw new Error(error.response?.data?.detail || '发送验证码失败')
+    }
+  }
+
+  const resetPassword = async (email: string, code: string, newPassword: string) => {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/auth/reset-password`, {
+        email,
+        code,
+        new_password: newPassword
+      })
+      
+      const { access_token, user: userData } = response.data
+      
+      setToken(access_token)
+      setUser(userData)
+      
+      localStorage.setItem('auth_token', access_token)
+      localStorage.setItem('user', JSON.stringify(userData))
+    } catch (error: any) {
+      throw new Error(error.response?.data?.detail || '重置密码失败')
+    }
+  }
+
   return (
-    <AuthContext.Provider value={{ user, token, login, register, logout, isLoading }}>
+    <AuthContext.Provider value={{ 
+      user, 
+      token, 
+      login, 
+      register, 
+      logout, 
+      isLoading,
+      sendVerificationCode,
+      verifyCode,
+      sendResetPasswordCode,
+      resetPassword
+    }}>
       {children}
     </AuthContext.Provider>
   )

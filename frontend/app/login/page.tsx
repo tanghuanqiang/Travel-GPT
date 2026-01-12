@@ -44,8 +44,8 @@ export default function LoginPage() {
               <Plane className="w-8 h-8 text-white" />
             </div>
           </div>
-          <CardTitle className="text-3xl font-bold">欢迎回来</CardTitle>
-          <CardDescription>登录您的 TravelPlanGPT 账号</CardDescription>
+          <CardTitle className="text-2xl sm:text-3xl font-bold">欢迎回来</CardTitle>
+          <CardDescription className="text-sm sm:text-base">登录您的 TravelPlanGPT 账号</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -73,7 +73,12 @@ export default function LoginPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="password">密码</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="password">密码</Label>
+                <Link href="/forgot-password" className="text-sm text-primary hover:underline">
+                  忘记密码？
+                </Link>
+              </div>
               <div className="relative">
                 <Lock className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
                 <Input
