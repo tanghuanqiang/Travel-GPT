@@ -213,8 +213,12 @@ async def register(user_data: UserRegister, db: Session = Depends(get_db)):
         if existing_user:
             raise HTTPException(status_code=400, detail="该邮箱已被注册")
         
-        # 注意：邮箱验证应该在注册前完成（通过 /verify-code 接口）
-        # 验证码在验证成功后会从数据库删除，所以这里不再检查
+        # 验证密码长度（bcrypt 限制72字节）
+        if len(user_data.password.encode('utf-8')) > 72:
+            raise HTTPException(
+                status_code=400,
+                detail="密码长度不能超过72字节，请使用更短的密码"
+            )
         
         # 创建新用户
         hashed_password = get_password_hash(user_data.password)

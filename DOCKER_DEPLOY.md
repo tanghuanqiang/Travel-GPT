@@ -53,9 +53,17 @@ deploy.bat
 
 部署成功后，可通过以下地址访问：
 
+**本地访问：**
 - **前端应用**: http://localhost:18891
 - **后端API**: http://localhost:18890
 - **API文档**: http://localhost:18890/docs
+
+**服务器访问（使用IP）：**
+- **前端应用**: http://YOUR_SERVER_IP:18891
+- **后端API**: http://YOUR_SERVER_IP:18890
+- **API文档**: http://YOUR_SERVER_IP:18890/docs
+
+⚠️ **重要：使用 IP 访问时，必须配置 CORS 和 API URL（见下方）**
 
 ## 🔧 端口配置
 
@@ -67,6 +75,76 @@ deploy.bat
 | 前端 | 18891 | 18889 |
 
 如需修改端口，请编辑 `.env` 文件中的 `BACKEND_PORT` 和 `FRONTEND_PORT`。
+
+## 🌐 使用 IP 地址访问配置
+
+如果通过 IP 地址访问（而非域名），需要配置以下环境变量：
+
+### 1. 配置 CORS_ORIGINS
+
+在 `.env` 文件中，将 `CORS_ORIGINS` 设置为包含服务器 IP 地址：
+
+```env
+# 替换 YOUR_SERVER_IP 为实际服务器 IP
+CORS_ORIGINS=http://YOUR_SERVER_IP:18891,http://localhost:18891,http://127.0.0.1:18891
+```
+
+**示例：**
+```env
+# 如果服务器 IP 是 192.168.1.100
+CORS_ORIGINS=http://192.168.1.100:18891,http://localhost:18891,http://127.0.0.1:18891
+```
+
+### 2. 配置 NEXT_PUBLIC_API_URL
+
+在 `.env` 文件中，将 `NEXT_PUBLIC_API_URL` 设置为后端 API 的完整地址：
+
+```env
+# 替换 YOUR_SERVER_IP 为实际服务器 IP
+NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:18890
+```
+
+**示例：**
+```env
+# 如果服务器 IP 是 192.168.1.100
+NEXT_PUBLIC_API_URL=http://192.168.1.100:18890
+```
+
+### 3. 重新构建和启动
+
+配置完成后，需要重新构建前端（因为 `NEXT_PUBLIC_API_URL` 在构建时注入）：
+
+```bash
+# 停止服务
+docker compose down
+
+# 重新构建前端（不使用缓存）
+docker compose build --no-cache frontend
+
+# 启动服务
+docker compose up -d
+
+# 查看日志
+docker compose logs -f
+```
+
+### 4. 验证配置
+
+访问前端后，打开浏览器开发者工具（F12），检查：
+- **Network 标签**：API 请求应该指向正确的后端地址
+- **Console 标签**：不应该有 CORS 错误
+
+### 使用域名访问
+
+如果使用域名访问，配置方式相同，只需将 IP 替换为域名：
+
+```env
+# 使用域名
+CORS_ORIGINS=http://yourdomain.com:18891,https://yourdomain.com
+NEXT_PUBLIC_API_URL=http://yourdomain.com:18890
+```
+
+**注意：** 使用 HTTPS 时，确保后端也支持 HTTPS 或配置反向代理。
 
 ## 📋 常用命令
 
@@ -124,12 +202,44 @@ docker compose build --no-cache
 docker compose build --progress=plain
 ```
 
-### 3. 前端无法连接后端
+### 3. 前端无法连接后端 / CORS 错误
 
-检查：
-1. 确保 `.env` 文件中的 `NEXT_PUBLIC_API_URL` 配置正确
-2. 确保 `CORS_ORIGINS` 包含前端地址
-3. 检查后端服务是否正常运行：`docker compose logs backend`
+**错误信息：** `strict-origin-when-cross-origin` 或 `CORS policy` 相关错误
+
+**原因：** 使用 IP 地址访问时，CORS 配置未包含服务器 IP
+
+**解决方案：**
+
+1. **检查当前配置**
+   ```bash
+   cat .env | grep CORS_ORIGINS
+   cat .env | grep NEXT_PUBLIC_API_URL
+   ```
+
+2. **更新 `.env` 文件**
+   ```env
+   # 替换 YOUR_SERVER_IP 为实际服务器 IP（例如：192.168.1.100）
+   CORS_ORIGINS=http://YOUR_SERVER_IP:18891,http://localhost:18891,http://127.0.0.1:18891
+   NEXT_PUBLIC_API_URL=http://YOUR_SERVER_IP:18890
+   ```
+
+3. **重新构建前端**
+   ```bash
+   docker compose down
+   docker compose build --no-cache frontend
+   docker compose up -d
+   ```
+
+4. **验证配置**
+   - 访问前端：`http://YOUR_SERVER_IP:18891`
+   - 打开浏览器开发者工具（F12）
+   - 检查 Network 标签，API 请求应该成功
+   - 检查 Console 标签，不应该有 CORS 错误
+
+**其他检查：**
+- 确保后端服务正常运行：`docker compose logs backend`
+- 确保端口未被防火墙阻止
+- 如果使用域名，确保 DNS 解析正确
 
 ### 4. 数据库问题
 
