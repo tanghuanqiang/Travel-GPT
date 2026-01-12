@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { useAuth } from "@/lib/auth-context"
 import { Button } from "@/components/ui/button"
@@ -101,7 +101,8 @@ const filterValidImages = (images?: string[]): string[] => {
   return images.filter(isValidImageUrl)
 }
 
-export default function ResultPage() {
+// 内部组件：使用 useSearchParams
+function ResultPageContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { user, token } = useAuth()
@@ -828,5 +829,23 @@ export default function ResultPage() {
         </DialogContent>
       </Dialog>
     </div>
+  )
+}
+
+// 主组件：用 Suspense 包裹
+export default function ResultPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gradient-to-br from-orange-50 via-blue-50 to-green-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 flex items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto mb-4" />
+            <p className="text-muted-foreground">加载中...</p>
+          </div>
+        </div>
+      }
+    >
+      <ResultPageContent />
+    </Suspense>
   )
 }
