@@ -25,6 +25,13 @@ RUN if [ -f pnpm-lock.yaml ]; then \
 # 复制源代码
 COPY . .
 
+# 创建 public 目录（如果不存在，Next.js 需要）
+# 如果目录为空，创建一个占位符文件，确保 COPY 不会失败
+RUN mkdir -p /app/public && \
+    if [ ! "$(ls -A /app/public)" ]; then \
+        touch /app/public/.gitkeep; \
+    fi
+
 # 构建应用
 RUN if [ -f pnpm-lock.yaml ]; then \
         pnpm run build; \
@@ -46,10 +53,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
-# 复制必要的文件
-COPY --from=builder /app/public ./public
+# 复制 public 目录（已确保在 builder 阶段存在且不为空）
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
-# 复制 standalone 构建产物（如果存在）
+# 复制 standalone 构建产物
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
