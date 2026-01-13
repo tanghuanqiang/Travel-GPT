@@ -169,23 +169,34 @@ def generate_pdf(itinerary_data: Dict[str, Any], destination: str, days: int) ->
         story.append(Spacer(1, 20))
     
     # 实用建议
-    if 'tips' in itinerary_data and itinerary_data['tips']:
+    tips = itinerary_data.get('tips') or itinerary_data.get('practicalTips')
+    if tips:
         story.append(Paragraph("实用旅行建议", heading_style))
-        tips = itinerary_data['tips']
         
         if tips.get('transportation'):
             story.append(Paragraph("交通建议", styles['Heading3']))
             story.append(Paragraph(tips['transportation'].replace('\n', '<br/>'), styles['Normal']))
             story.append(Spacer(1, 12))
         
-        if tips.get('packing'):
+        # 打包清单可能是数组或字符串
+        packing = tips.get('packingList') or tips.get('packing')
+        if packing:
             story.append(Paragraph("打包清单", styles['Heading3']))
-            story.append(Paragraph(tips['packing'].replace('\n', '<br/>'), styles['Normal']))
+            if isinstance(packing, list):
+                packing_text = '<br/>'.join([f"• {item}" for item in packing])
+                story.append(Paragraph(packing_text, styles['Normal']))
+            else:
+                story.append(Paragraph(packing.replace('\n', '<br/>'), styles['Normal']))
             story.append(Spacer(1, 12))
         
         if tips.get('weather'):
             story.append(Paragraph("天气信息", styles['Heading3']))
             story.append(Paragraph(tips['weather'].replace('\n', '<br/>'), styles['Normal']))
+            story.append(Spacer(1, 12))
+        
+        if tips.get('seasonalNotes'):
+            story.append(Paragraph("季节注意事项", styles['Heading3']))
+            story.append(Paragraph(tips['seasonalNotes'].replace('\n', '<br/>'), styles['Normal']))
             story.append(Spacer(1, 12))
     
     # 构建PDF

@@ -28,6 +28,7 @@ from app.agent import TravelPlanningAgent
 from app.models import TravelRequest, TravelItinerary
 from app.database import get_db, engine, Base, settings, SessionLocal
 from app.db_models import User, Itinerary, EmailVerification, ShareLink, Favorite, TemporaryShare, Task
+from app.pdf_export import generate_pdf
 from app.auth import (
     get_password_hash, 
     verify_password, 
@@ -100,6 +101,11 @@ class CreateShareLinkRequest(BaseModel):
 class CreateTemporaryShareRequest(BaseModel):
     itinerary_data: dict  # 完整的行程数据
     expires_days: int = 7  # 临时分享默认7天过期
+
+class ExportPDFRequest(BaseModel):
+    itinerary_data: dict
+    destination: str
+    days: int
 
 class UpdateItineraryRequest(BaseModel):
     agent_name: Optional[str] = None
@@ -885,7 +891,7 @@ async def export_itinerary_pdf(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """导出行程为PDF"""
+    """导出行程为PDF（需要登录）"""
     # 获取行程
     itinerary = db.query(Itinerary).filter(
         Itinerary.id == itinerary_id,
@@ -907,6 +913,104 @@ async def export_itinerary_pdf(
         
         # 返回PDF文件
         filename = f"{itinerary.destination}_{itinerary.days}天行程.pdf"
+        return Response(
+            content=pdf_buffer.read(),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+    except Exception as e:
+        logger.error(f"PDF生成失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"PDF生成失败: {str(e)}"
+        )
+
+
+@app.get("/api/share/{share_token}/export/pdf")
+async def export_shared_itinerary_pdf(
+    share_token: str,
+    db: Session = Depends(get_db)
+):
+    """导出分享的行程为PDF（无需登录）"""
+    # 先尝试查找永久分享
+    share_link = db.query(ShareLink).filter(ShareLink.share_token == share_token).first()
+    
+    if share_link:
+        # 获取关联的行程
+        itinerary = db.query(Itinerary).filter(Itinerary.id == share_link.itinerary_id).first()
+        
+        if not itinerary:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="行程不存在"
+            )
+        
+        # 检查是否过期
+        if share_link.expires_at and datetime.utcnow() > share_link.expires_at:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="分享链接已过期"
+            )
+        
+        itinerary_data = json.loads(itinerary.itinerary_data)
+        destination = itinerary.destination or "未知目的地"
+        days = itinerary.days or len(itinerary_data.get("dailyPlans", [])) or 1
+    else:
+        # 尝试查找临时分享
+        temporary_share = db.query(TemporaryShare).filter(TemporaryShare.share_token == share_token).first()
+        
+        if not temporary_share:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="分享链接不存在"
+            )
+        
+        # 检查是否过期
+        if datetime.utcnow() > temporary_share.expires_at:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="分享链接已过期"
+            )
+        
+        itinerary_data = json.loads(temporary_share.itinerary_data)
+        destination = itinerary_data.get("destination") or "未知目的地"
+        days = itinerary_data.get("days") or len(itinerary_data.get("dailyPlans", [])) or 1
+    
+    try:
+        # 生成PDF
+        pdf_buffer = generate_pdf(itinerary_data, destination, days)
+        
+        # 返回PDF文件
+        filename = f"{destination}_{days}天行程.pdf"
+        return Response(
+            content=pdf_buffer.read(),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+    except Exception as e:
+        logger.error(f"PDF生成失败: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"PDF生成失败: {str(e)}"
+        )
+
+
+@app.post("/api/export/pdf")
+async def export_pdf_from_data(
+    request: ExportPDFRequest,
+    db: Session = Depends(get_db)
+):
+    """直接从行程数据导出PDF（无需登录，用于游客用户）"""
+    try:
+        # 生成PDF
+        pdf_buffer = generate_pdf(request.itinerary_data, request.destination, request.days)
+        
+        # 返回PDF文件
+        filename = f"{request.destination}_{request.days}天行程.pdf"
         return Response(
             content=pdf_buffer.read(),
             media_type="application/pdf",

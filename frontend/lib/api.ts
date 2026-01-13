@@ -62,6 +62,26 @@ export const api = {
     return response.data
   },
 
+  // 从分享链接导出PDF（无需登录）
+  exportSharedItineraryPDF: async (shareToken: string): Promise<Blob> => {
+    const response = await apiClient.get(`/api/share/${shareToken}/export/pdf`, {
+      responseType: 'blob',
+    })
+    return response.data
+  },
+
+  // 直接从数据导出PDF（无需登录，用于游客用户）
+  exportPDFFromData: async (itineraryData: any, destination: string, days: number): Promise<Blob> => {
+    const response = await apiClient.post('/api/export/pdf', {
+      itinerary_data: itineraryData,
+      destination: destination,
+      days: days,
+    }, {
+      responseType: 'blob',
+    })
+    return response.data
+  },
+
   // 行程编辑
   updateItinerary: async (itineraryId: number, data: {
     agent_name?: string

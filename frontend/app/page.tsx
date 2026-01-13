@@ -13,9 +13,9 @@ import { Plane, MapPin, Calendar, Users, DollarSign, Sparkles, LogIn, History, L
 interface TravelFormData {
   agentName: string
   destination: string
-  days: number
+  days: string
   budget: string
-  travelers: number
+  travelers: string
   preferences: string[]
   extraRequirements: string
 }
@@ -63,9 +63,9 @@ export default function HomePage() {
   const [formData, setFormData] = useState<TravelFormData>({
     agentName: "我的周末旅行",
     destination: "",
-    days: 2,
+    days: "2",
     budget: "",
-    travelers: 2,
+    travelers: "2",
     preferences: [],
     extraRequirements: ""
   })
@@ -87,7 +87,31 @@ export default function HomePage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    localStorage.setItem('travelPlan', JSON.stringify(formData))
+    
+    // 校验必填字段
+    if (!formData.destination.trim()) {
+      alert("请输入目的地城市")
+      return
+    }
+    
+    if (!formData.days.trim()) {
+      alert("请输入旅行天数")
+      return
+    }
+    
+    if (!formData.travelers.trim()) {
+      alert("请输入出行人数")
+      return
+    }
+    
+    // 转换为数字类型存储
+    const submitData = {
+      ...formData,
+      days: parseInt(formData.days) || 2,
+      travelers: parseInt(formData.travelers) || 2
+    }
+    
+    localStorage.setItem('travelPlan', JSON.stringify(submitData))
     router.push('/plan')
   }
 
@@ -95,7 +119,7 @@ export default function HomePage() {
     setFormData({
       ...formData,
       destination: preset.destination,
-      days: preset.days,
+      days: String(preset.days),
       budget: preset.budget,
       preferences: preset.preferences
     })
@@ -264,7 +288,7 @@ export default function HomePage() {
                         min="1"
                         max="5"
                         value={formData.days}
-                        onChange={(e) => setFormData({...formData, days: parseInt(e.target.value) || 2})}
+                        onChange={(e) => setFormData({...formData, days: e.target.value})}
                         className="text-sm sm:text-base"
                       />
                     </div>
@@ -278,7 +302,7 @@ export default function HomePage() {
                         type="number"
                         min="1"
                         value={formData.travelers}
-                        onChange={(e) => setFormData({...formData, travelers: parseInt(e.target.value) || 2})}
+                        onChange={(e) => setFormData({...formData, travelers: e.target.value})}
                         className="text-sm sm:text-base"
                       />
                     </div>

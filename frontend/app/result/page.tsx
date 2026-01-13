@@ -108,6 +108,7 @@ function ResultPageContent() {
   const { user, token } = useAuth()
   const [itinerary, setItinerary] = useState<ItineraryData | null>(null)
   const [itineraryId, setItineraryId] = useState<number | null>(null)
+  const [shareToken, setShareToken] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   
   // 分享对话框状态
@@ -149,6 +150,7 @@ function ResultPageContent() {
           const shareData = await api.getSharedItinerary(tokenParam)
           const data = shareData.itinerary_data
           processItineraryData(data)
+          setShareToken(tokenParam) // 保存分享token用于PDF导出
           
           // 如果是登录用户且是永久分享，可以检查收藏状态
           if (shareData.id && user && token) {
@@ -250,22 +252,42 @@ function ResultPageContent() {
 
   // PDF导出
   const handleDownloadPDF = async () => {
-    if (!itineraryId || !user || !token) {
-      alert('请先登录并保存行程后才能导出PDF')
+    if (!itinerary) {
+      alert('行程数据不存在，无法导出PDF')
       return
     }
 
     try {
-      const blob = await api.exportItineraryPDF(itineraryId)
+      let blob: Blob
+      
+      // 优先级1: 登录用户且已保存的行程
+      if (itineraryId && user && token) {
+        blob = await api.exportItineraryPDF(itineraryId)
+      }
+      // 优先级2: 从分享链接查看的行程
+      else if (shareToken) {
+        blob = await api.exportSharedItineraryPDF(shareToken)
+      }
+      // 优先级3: 游客用户的本地行程数据
+      else {
+        const destination = itinerary.destination || "未知目的地"
+        const days = itinerary.days || itinerary.dailyPlans?.length || 2
+        blob = await api.exportPDFFromData(itinerary, destination, days)
+      }
+      
+      // 下载PDF文件
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `${itinerary?.overview ? '行程' : 'itinerary'}.pdf`
+      const destination = itinerary.destination || "未知目的地"
+      const days = itinerary.days || itinerary.dailyPlans?.length || 2
+      a.download = `${destination}_${days}天行程.pdf`
       document.body.appendChild(a)
       a.click()
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
     } catch (err: any) {
+      console.error('PDF导出失败:', err)
       alert(err.response?.data?.detail || 'PDF导出失败，请稍后重试')
     }
   }
@@ -462,12 +484,13 @@ function ResultPageContent() {
               >
                 <Share2 className="w-4 h-4" />
               </Button>
-              {itineraryId && user && (
+              {itinerary && (
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={handleDownloadPDF}
                   className="p-2"
+                  title="导出PDF"
                 >
                   <Download className="w-4 h-4" />
                 </Button>
