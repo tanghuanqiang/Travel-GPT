@@ -101,3 +101,19 @@ class TemporaryShare(Base):
     itinerary_data = Column(Text, nullable=False)  # 完整的行程数据（JSON格式）
     expires_at = Column(DateTime(timezone=True), nullable=False)  # 必须设置过期时间
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Task(Base):
+    """异步任务表"""
+    __tablename__ = "tasks"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(String(64), unique=True, index=True, nullable=False)  # 唯一任务ID
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)  # 可为空，支持游客用户
+    status = Column(String(20), nullable=False, default="pending")  # pending, processing, completed, failed
+    request_data = Column(Text, nullable=False)  # 请求参数（JSON格式）
+    result_data = Column(Text, nullable=True)  # 结果数据（JSON格式，完成后填充）
+    error_message = Column(Text, nullable=True)  # 错误信息
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    completed_at = Column(DateTime(timezone=True), nullable=True)  # 完成时间

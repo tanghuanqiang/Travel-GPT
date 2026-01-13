@@ -77,6 +77,10 @@ export default function PlanPage() {
   
   // 防止 React StrictMode 导致的重复请求
   const hasStartedRef = useRef(false)
+  // 存储当前任务的ID，确保并发安全
+  const currentTaskIdRef = useRef<string | null>(null)
+  // 用于取消轮询的标记
+  const isCancelledRef = useRef(false)
   
   // 当进入最终归纳阶段时，每2秒切换提示文字
   useEffect(() => {
@@ -150,44 +154,123 @@ export default function PlanPage() {
       // 所有步骤完成，进入最终归纳阶段
       setIsFinalizing(true)
       
-      // 实际调用后端API
+      // 调用后端API创建任务
       const headers: any = {}
       if (token) {
         headers['Authorization'] = `Bearer ${token}`
       }
       
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:18890'
-      const response = await axios.post(`${apiUrl}/api/generate-plan`, formData, { headers })
-      setPlanData(response.data)
+      
+      // 重置取消标记
+      isCancelledRef.current = false
+      
+      // 创建任务，获取task_id
+      const taskResponse = await axios.post(`${apiUrl}/api/generate-plan`, formData, { headers })
+      const taskId = taskResponse.data.task_id
+      
+      // 存储当前任务ID，确保并发安全
+      currentTaskIdRef.current = taskId
+      
+      console.log('任务已创建，task_id:', taskId)
+      
+      // 轮询任务状态
+      const pollTaskStatus = async (): Promise<any> => {
+        const maxAttempts = 150 // 最多轮询5分钟（每2秒一次，5分钟=300秒/2=150次）
+        let attempts = 0
+        
+        while (attempts < maxAttempts) {
+          // 检查是否已取消（用户可能离开了页面或开始了新任务）
+          if (isCancelledRef.current) {
+            throw new Error('任务已取消')
+          }
+          
+          // 验证当前任务ID是否仍然有效（防止并发问题）
+          if (currentTaskIdRef.current !== taskId) {
+            throw new Error('检测到新任务，已取消当前任务')
+          }
+          
+          try {
+            const statusResponse = await axios.get(`${apiUrl}/api/tasks/${taskId}`, { headers })
+            const taskStatus = statusResponse.data
+            
+            // 再次验证任务ID（双重检查）
+            if (currentTaskIdRef.current !== taskId) {
+              throw new Error('检测到新任务，已取消当前任务')
+            }
+            
+            console.log(`任务状态 (${attempts + 1}/${maxAttempts}):`, taskStatus.status, 'task_id:', taskId)
+            
+            if (taskStatus.status === 'completed') {
+              // 验证返回的任务ID是否匹配（确保是当前用户的任务）
+              if (taskStatus.task_id !== taskId) {
+                throw new Error('任务ID不匹配，可能存在并发问题')
+              }
+              // 任务完成，返回结果
+              return taskStatus.result
+            } else if (taskStatus.status === 'failed') {
+              // 任务失败
+              throw new Error(taskStatus.error_message || '任务处理失败')
+            } else {
+              // 任务还在处理中，继续等待
+              await new Promise(resolve => setTimeout(resolve, 2000)) // 等待2秒
+              attempts++
+            }
+          } catch (err: any) {
+            // 如果已取消，直接抛出
+            if (isCancelledRef.current || currentTaskIdRef.current !== taskId) {
+              throw new Error('任务已取消')
+            }
+            
+            if (err.response?.status === 404) {
+              throw new Error('任务不存在')
+            }
+            // 网络错误，继续重试
+            await new Promise(resolve => setTimeout(resolve, 2000)) // 等待2秒
+            attempts++
+          }
+        }
+        
+        throw new Error('任务处理超时，请稍后重试')
+      }
+      
+      // 开始轮询
+      const result = await pollTaskStatus()
+      
+      // 再次验证任务ID（确保结果属于当前任务）
+      if (currentTaskIdRef.current !== taskId) {
+        throw new Error('任务ID不匹配，结果可能不属于当前任务')
+      }
+      
+      setPlanData(result)
       setIsRunning(false)
       setIsFinalizing(false)
       
       // 保存结果到localStorage（向后兼容）
-      localStorage.setItem('itinerary', JSON.stringify(response.data))
+      localStorage.setItem('itinerary', JSON.stringify(result))
       
       // 如果是游客用户，创建临时分享链接并跳转到唯一URL
       if (!token) {
         try {
           // 从localStorage获取原始请求参数，包含destination和days
           const travelPlan = localStorage.getItem('travelPlan')
-          let shareDataToSend = { ...response.data }
+          let shareDataToSend = { ...result }
           
           if (travelPlan) {
             try {
               const planData = JSON.parse(travelPlan)
               shareDataToSend.destination = planData.destination || ""
-              shareDataToSend.days = planData.days || response.data.dailyPlans?.length || 2
+              shareDataToSend.days = planData.days || result.dailyPlans?.length || 2
             } catch (e) {
               shareDataToSend.destination = ""
-              shareDataToSend.days = response.data.dailyPlans?.length || 2
+              shareDataToSend.days = result.dailyPlans?.length || 2
             }
           } else {
             shareDataToSend.destination = ""
-            shareDataToSend.days = response.data.dailyPlans?.length || 2
+            shareDataToSend.days = result.dailyPlans?.length || 2
           }
           
           // 创建临时分享链接
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:18890'
           const shareResponse = await axios.post(`${apiUrl}/api/share/temporary`, {
             itinerary_data: shareDataToSend,
             expires_days: 7
@@ -212,9 +295,9 @@ export default function PlanPage() {
         }, 1000)
       }
 
-    } catch (err) {
+    } catch (err: any) {
       console.error('Planning error:', err)
-      setError('生成行程时出错，请重试')
+      setError(err.message || '生成行程时出错，请重试')
       setIsRunning(false)
       setIsFinalizing(false)
     }
@@ -225,9 +308,21 @@ export default function PlanPage() {
   }
 
   const handleStop = () => {
+    // 取消当前任务
+    isCancelledRef.current = true
+    currentTaskIdRef.current = null
     setIsRunning(false)
     router.push('/')
   }
+  
+  // 组件卸载时清理
+  useEffect(() => {
+    return () => {
+      // 组件卸载时取消任务
+      isCancelledRef.current = true
+      currentTaskIdRef.current = null
+    }
+  }, [])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 via-blue-50 to-green-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900">

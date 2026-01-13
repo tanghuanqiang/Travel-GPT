@@ -10,6 +10,8 @@ from dotenv import load_dotenv
 import json
 import logging
 import secrets
+import asyncio
+import uuid
 from datetime import datetime, timedelta
 
 # 配置日志
@@ -24,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 from app.agent import TravelPlanningAgent
 from app.models import TravelRequest, TravelItinerary
-from app.database import get_db, engine, Base, settings
-from app.db_models import User, Itinerary, EmailVerification, ShareLink, Favorite, TemporaryShare
+from app.database import get_db, engine, Base, settings, SessionLocal
+from app.db_models import User, Itinerary, EmailVerification, ShareLink, Favorite, TemporaryShare, Task
 from app.auth import (
     get_password_hash, 
     verify_password, 
@@ -136,6 +138,74 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # Initialize agent
 travel_agent = TravelPlanningAgent()
+
+# 后台任务处理函数
+async def process_travel_plan_task(task_id: str, request_data: dict, user_id: Optional[int] = None):
+    """
+    后台异步处理旅行计划生成任务
+    """
+    db = SessionLocal()
+    try:
+        # 更新任务状态为processing
+        task = db.query(Task).filter(Task.task_id == task_id).first()
+        if not task:
+            logger.error(f"任务 {task_id} 不存在")
+            return
+        
+        task.status = "processing"
+        task.updated_at = datetime.utcnow()
+        db.commit()
+        
+        logger.info(f"🤖 [后台任务] 开始处理任务 {task_id}")
+        
+        # 解析请求数据
+        travel_request = TravelRequest(**request_data)
+        
+        # 生成行程
+        itinerary = await travel_agent.generate_itinerary(travel_request)
+        logger.info(f"✅ [后台任务] 任务 {task_id} 完成")
+        
+        # 如果用户已登录，保存到数据库
+        itinerary_id = None
+        if user_id:
+            itinerary_record = Itinerary(
+                user_id=user_id,
+                agent_name=travel_request.agentName,
+                destination=travel_request.destination,
+                days=travel_request.days,
+                budget=travel_request.budget,
+                travelers=travel_request.travelers,
+                preferences=json.dumps(travel_request.preferences, ensure_ascii=False),
+                extra_requirements=travel_request.extraRequirements,
+                itinerary_data=itinerary.model_dump_json(),
+                total_budget=itinerary.overview.totalBudget if itinerary.overview else None
+            )
+            db.add(itinerary_record)
+            db.commit()
+            db.refresh(itinerary_record)
+            itinerary_id = itinerary_record.id
+            logger.info(f"[INFO] 已保存行程: 用户 {user_id}, 目的地 {travel_request.destination}")
+        
+        # 更新任务状态为completed
+        task.status = "completed"
+        task.result_data = itinerary.model_dump_json()
+        task.completed_at = datetime.utcnow()
+        task.updated_at = datetime.utcnow()
+        db.commit()
+        
+        logger.info(f"✅ [后台任务] 任务 {task_id} 已保存结果")
+        
+    except Exception as e:
+        logger.error(f"❌ [后台任务] 任务 {task_id} 处理失败: {str(e)}")
+        # 更新任务状态为failed
+        task = db.query(Task).filter(Task.task_id == task_id).first()
+        if task:
+            task.status = "failed"
+            task.error_message = str(e)
+            task.updated_at = datetime.utcnow()
+            db.commit()
+    finally:
+        db.close()
 
 
 @app.get("/")
@@ -410,18 +480,24 @@ async def test_endpoint():
     return {"status": "ok", "message": "后端正常工作！", "logging": "使用 logger"}
 
 
-@app.post("/api/generate-plan", response_model=TravelItinerary)
+class TaskResponse(BaseModel):
+    task_id: str
+    status: str
+    message: str
+
+@app.post("/api/generate-plan", response_model=TaskResponse)
 async def generate_travel_plan(
     request: TravelRequest,
     db: Session = Depends(get_db),
     current_user: Optional[User] = Depends(get_current_user_optional)
 ):
     """
-    Generate a travel itinerary based on user requirements
+    创建旅行计划生成任务（异步）
+    立即返回任务ID，前端通过轮询 /api/tasks/{task_id} 获取结果
     支持登录和未登录用户，登录用户会保存历史记录
     """
     logger.info("\n" + "="*80)
-    logger.info("🚀 [API] 收到生成行程请求")
+    logger.info("🚀 [API] 收到生成行程请求（异步模式）")
     logger.info("="*80)
     logger.info(f"📍 目的地: {request.destination}")
     logger.info(f"📅 天数: {request.days}")
@@ -432,37 +508,101 @@ async def generate_travel_plan(
     logger.info("="*80 + "\n")
     
     try:
-        # 每次都重新生成行程（不使用缓存）
-        logger.info("🤖 开始调用 travel_agent.generate_itinerary()...")
-        itinerary = await travel_agent.generate_itinerary(request)
-        logger.info("✅ 行程生成完成！")
+        # 生成唯一任务ID
+        task_id = str(uuid.uuid4())
         
-        # 如果用户已登录，保存到数据库
-        if current_user:
-            itinerary_record = Itinerary(
-                user_id=current_user.id,
-                agent_name=request.agentName,
-                destination=request.destination,
-                days=request.days,
-                budget=request.budget,
-                travelers=request.travelers,
-                preferences=json.dumps(request.preferences, ensure_ascii=False),
-                extra_requirements=request.extraRequirements,
-                itinerary_data=itinerary.model_dump_json(),
-                total_budget=itinerary.overview.totalBudget if itinerary.overview else None
-            )
-            db.add(itinerary_record)
-            db.commit()
-            print(f"[INFO] 已保存行程: 用户 {current_user.id}, 目的地 {request.destination}")
+        # 创建任务记录
+        task = Task(
+            task_id=task_id,
+            user_id=current_user.id if current_user else None,
+            status="pending",
+            request_data=json.dumps(request.model_dump(), ensure_ascii=False)
+        )
+        db.add(task)
+        db.commit()
         
-        return itinerary
+        logger.info(f"✅ 任务 {task_id} 已创建，开始后台处理")
+        
+        # 启动后台任务
+        request_dict = request.model_dump()
+        user_id = current_user.id if current_user else None
+        asyncio.create_task(process_travel_plan_task(task_id, request_dict, user_id))
+        
+        return TaskResponse(
+            task_id=task_id,
+            status="pending",
+            message="任务已创建，正在处理中"
+        )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating plan: {str(e)}")
+        logger.error(f"❌ 创建任务失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error creating task: {str(e)}")
 
 
 @app.get("/api/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+# ============ Task Endpoints ============
+class TaskStatusResponse(BaseModel):
+    task_id: str
+    status: str  # pending, processing, completed, failed
+    result: Optional[dict] = None  # 完成后的结果数据
+    error_message: Optional[str] = None  # 失败时的错误信息
+    created_at: str
+    updated_at: str
+    completed_at: Optional[str] = None
+
+@app.get("/api/tasks/{task_id}", response_model=TaskStatusResponse)
+async def get_task_status(
+    task_id: str,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_current_user_optional)
+):
+    """查询任务状态和结果（支持登录和未登录用户）"""
+    task = db.query(Task).filter(Task.task_id == task_id).first()
+    
+    if not task:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="任务不存在"
+        )
+    
+    # 如果用户已登录，验证任务是否属于该用户（增强并发安全）
+    if current_user and task.user_id is not None:
+        if task.user_id != current_user.id:
+            logger.warning(f"用户 {current_user.id} 尝试访问不属于自己的任务 {task_id}（任务属于用户 {task.user_id}）")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="无权访问此任务"
+            )
+    
+    # 验证返回的task_id与请求的task_id匹配（双重验证）
+    if task.task_id != task_id:
+        logger.error(f"任务ID不匹配！请求: {task_id}, 数据库: {task.task_id}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="任务ID验证失败"
+        )
+    
+    result_data = None
+    if task.result_data:
+        try:
+            result_data = json.loads(task.result_data)
+        except:
+            result_data = None
+    
+    logger.debug(f"查询任务状态: task_id={task_id}, status={task.status}, user_id={current_user.id if current_user else None}")
+    
+    return TaskStatusResponse(
+        task_id=task.task_id,
+        status=task.status,
+        result=result_data,
+        error_message=task.error_message,
+        created_at=str(task.created_at),
+        updated_at=str(task.updated_at) if task.updated_at else str(task.created_at),
+        completed_at=str(task.completed_at) if task.completed_at else None
+    )
 
 
 # ============ History Endpoints ============
