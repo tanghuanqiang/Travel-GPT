@@ -12,7 +12,9 @@ import logging
 import secrets
 import asyncio
 import uuid
+import re
 from datetime import datetime, timedelta
+from urllib.parse import quote
 
 # 配置日志
 logging.basicConfig(
@@ -23,6 +25,22 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+def safe_filename_for_header(filename: str) -> tuple[str, str]:
+    """
+    生成安全的HTTP响应头文件名
+    返回: (ascii_filename, utf8_encoded_filename)
+    """
+    # 创建ASCII fallback文件名（移除非ASCII字符）
+    ascii_filename = re.sub(r'[^\x00-\x7F]+', '_', filename)
+    # 如果原文件名完全是ASCII，直接使用
+    if ascii_filename == filename:
+        return filename, quote(filename.encode('utf-8'))
+    # 否则使用ASCII版本作为fallback，UTF-8版本作为主要
+    utf8_encoded = quote(filename.encode('utf-8'))
+    return ascii_filename, utf8_encoded
+
 
 from app.agent import TravelPlanningAgent
 from app.models import TravelRequest, TravelItinerary
@@ -918,13 +936,12 @@ async def export_itinerary_pdf(
         
         # 返回PDF文件（处理中文文件名编码）
         filename = f"{destination}_{days}天行程.pdf"
-        from urllib.parse import quote
-        encoded_filename = quote(filename.encode('utf-8'))
+        ascii_filename, utf8_encoded = safe_filename_for_header(filename)
         return Response(
             content=pdf_buffer.read(),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}'
+                "Content-Disposition": f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{utf8_encoded}'
             }
         )
     except json.JSONDecodeError as e:
@@ -1005,13 +1022,12 @@ async def export_shared_itinerary_pdf(
         
         # 返回PDF文件（处理中文文件名编码）
         filename = f"{destination}_{days}天行程.pdf"
-        from urllib.parse import quote
-        encoded_filename = quote(filename.encode('utf-8'))
+        ascii_filename, utf8_encoded = safe_filename_for_header(filename)
         return Response(
             content=pdf_buffer.read(),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}'
+                "Content-Disposition": f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{utf8_encoded}'
             }
         )
     except json.JSONDecodeError as e:
@@ -1042,13 +1058,12 @@ async def export_pdf_from_data(
         
         # 返回PDF文件（处理中文文件名编码）
         filename = f"{destination}_{days}天行程.pdf"
-        from urllib.parse import quote
-        encoded_filename = quote(filename.encode('utf-8'))
+        ascii_filename, utf8_encoded = safe_filename_for_header(filename)
         return Response(
             content=pdf_buffer.read(),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}'
+                "Content-Disposition": f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{utf8_encoded}'
             }
         )
     except json.JSONDecodeError as e:
