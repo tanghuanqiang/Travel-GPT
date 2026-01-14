@@ -906,22 +906,35 @@ async def export_itinerary_pdf(
     
     try:
         # 解析行程数据
-        itinerary_data = json.loads(itinerary.itinerary_data)
+        if isinstance(itinerary.itinerary_data, str):
+            itinerary_data = json.loads(itinerary.itinerary_data)
+        else:
+            itinerary_data = itinerary.itinerary_data
         
         # 生成PDF
-        pdf_buffer = generate_pdf(itinerary_data, itinerary.destination, itinerary.days)
+        destination = itinerary.destination or "未知目的地"
+        days = itinerary.days or 1
+        pdf_buffer = generate_pdf(itinerary_data, destination, days)
         
-        # 返回PDF文件
-        filename = f"{itinerary.destination}_{itinerary.days}天行程.pdf"
+        # 返回PDF文件（处理中文文件名编码）
+        filename = f"{destination}_{days}天行程.pdf"
+        from urllib.parse import quote
+        encoded_filename = quote(filename.encode('utf-8'))
         return Response(
             content=pdf_buffer.read(),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"'
+                "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}'
             }
         )
+    except json.JSONDecodeError as e:
+        logger.error(f"PDF生成失败 - JSON解析错误: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"PDF生成失败: 行程数据格式错误 - {str(e)}"
+        )
     except Exception as e:
-        logger.error(f"PDF生成失败: {str(e)}")
+        logger.error(f"PDF生成失败: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"PDF生成失败: {str(e)}"
@@ -954,7 +967,10 @@ async def export_shared_itinerary_pdf(
                 detail="分享链接已过期"
             )
         
-        itinerary_data = json.loads(itinerary.itinerary_data)
+        if isinstance(itinerary.itinerary_data, str):
+            itinerary_data = json.loads(itinerary.itinerary_data)
+        else:
+            itinerary_data = itinerary.itinerary_data
         destination = itinerary.destination or "未知目的地"
         days = itinerary.days or len(itinerary_data.get("dailyPlans", [])) or 1
     else:
@@ -974,25 +990,38 @@ async def export_shared_itinerary_pdf(
                 detail="分享链接已过期"
             )
         
-        itinerary_data = json.loads(temporary_share.itinerary_data)
+        if isinstance(temporary_share.itinerary_data, str):
+            itinerary_data = json.loads(temporary_share.itinerary_data)
+        else:
+            itinerary_data = temporary_share.itinerary_data
         destination = itinerary_data.get("destination") or "未知目的地"
         days = itinerary_data.get("days") or len(itinerary_data.get("dailyPlans", [])) or 1
     
     try:
         # 生成PDF
+        destination = destination or "未知目的地"
+        days = days or 1
         pdf_buffer = generate_pdf(itinerary_data, destination, days)
         
-        # 返回PDF文件
+        # 返回PDF文件（处理中文文件名编码）
         filename = f"{destination}_{days}天行程.pdf"
+        from urllib.parse import quote
+        encoded_filename = quote(filename.encode('utf-8'))
         return Response(
             content=pdf_buffer.read(),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"'
+                "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}'
             }
         )
+    except json.JSONDecodeError as e:
+        logger.error(f"PDF生成失败 - JSON解析错误: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"PDF生成失败: 行程数据格式错误 - {str(e)}"
+        )
     except Exception as e:
-        logger.error(f"PDF生成失败: {str(e)}")
+        logger.error(f"PDF生成失败: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"PDF生成失败: {str(e)}"
@@ -1007,19 +1036,29 @@ async def export_pdf_from_data(
     """直接从行程数据导出PDF（无需登录，用于游客用户）"""
     try:
         # 生成PDF
-        pdf_buffer = generate_pdf(request.itinerary_data, request.destination, request.days)
+        destination = request.destination or "未知目的地"
+        days = request.days or 1
+        pdf_buffer = generate_pdf(request.itinerary_data, destination, days)
         
-        # 返回PDF文件
-        filename = f"{request.destination}_{request.days}天行程.pdf"
+        # 返回PDF文件（处理中文文件名编码）
+        filename = f"{destination}_{days}天行程.pdf"
+        from urllib.parse import quote
+        encoded_filename = quote(filename.encode('utf-8'))
         return Response(
             content=pdf_buffer.read(),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"'
+                "Content-Disposition": f'attachment; filename="{filename}"; filename*=UTF-8\'\'{encoded_filename}'
             }
         )
+    except json.JSONDecodeError as e:
+        logger.error(f"PDF生成失败 - JSON解析错误: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"PDF生成失败: 行程数据格式错误 - {str(e)}"
+        )
     except Exception as e:
-        logger.error(f"PDF生成失败: {str(e)}")
+        logger.error(f"PDF生成失败: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"PDF生成失败: {str(e)}"
