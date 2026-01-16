@@ -133,6 +133,9 @@ export default function PlanPage() {
         { step: "finalize", message: "完善行程细节，为您呈现完美计划" }
       ]
 
+      // 初始步骤进度范围：0-35%
+      const initialProgressMax = 35
+      
       for (let i = 0; i < steps.length; i++) {
         if (!isPaused) {
           setLogs(prev => [...prev, {
@@ -140,7 +143,8 @@ export default function PlanPage() {
             status: "running",
             timestamp: new Date().toLocaleTimeString()
           }])
-          setProgress((i + 1) / steps.length * 100)
+          // 初始步骤占总进度的35%
+          setProgress(((i + 1) / steps.length) * initialProgressMax)
           
           // 模拟延迟
           await new Promise(resolve => setTimeout(resolve, 1500))
@@ -153,6 +157,8 @@ export default function PlanPage() {
 
       // 所有步骤完成，进入最终归纳阶段
       setIsFinalizing(true)
+      // 初始步骤完成，进度设置为35%
+      setProgress(initialProgressMax)
       
       // 调用后端API创建任务
       const headers: any = {}
@@ -179,6 +185,10 @@ export default function PlanPage() {
         const maxAttempts = 150 // 最多轮询5分钟（每2秒一次，5分钟=300秒/2=150次）
         let attempts = 0
         
+        // 进度范围：35% (初始完成) -> 95% (轮询中) -> 100% (完成)
+        const progressStart = 35  // 轮询开始时的进度
+        const progressEnd = 95    // 轮询结束时的进度（完成前）
+        
         while (attempts < maxAttempts) {
           // 检查是否已取消（用户可能离开了页面或开始了新任务）
           if (isCancelledRef.current) {
@@ -190,6 +200,11 @@ export default function PlanPage() {
             throw new Error('检测到新任务，已取消当前任务')
           }
           
+          // 更新进度：从35%逐渐增加到95%
+          const progressIncrement = (progressEnd - progressStart) / maxAttempts
+          const currentProgress = Math.min(progressStart + (attempts * progressIncrement), progressEnd)
+          setProgress(currentProgress)
+          
           try {
             const statusResponse = await axios.get(`${apiUrl}/api/tasks/${taskId}`, { headers })
             const taskStatus = statusResponse.data
@@ -199,13 +214,15 @@ export default function PlanPage() {
               throw new Error('检测到新任务，已取消当前任务')
             }
             
-            console.log(`任务状态 (${attempts + 1}/${maxAttempts}):`, taskStatus.status, 'task_id:', taskId)
+            console.log(`任务状态 (${attempts + 1}/${maxAttempts}):`, taskStatus.status, 'task_id:', taskId, `进度: ${currentProgress.toFixed(1)}%`)
             
             if (taskStatus.status === 'completed') {
               // 验证返回的任务ID是否匹配（确保是当前用户的任务）
               if (taskStatus.task_id !== taskId) {
                 throw new Error('任务ID不匹配，可能存在并发问题')
               }
+              // 任务完成，进度设置为100%
+              setProgress(100)
               // 任务完成，返回结果
               return taskStatus.result
             } else if (taskStatus.status === 'failed') {
