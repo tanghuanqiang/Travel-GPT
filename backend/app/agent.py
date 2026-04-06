@@ -4,6 +4,8 @@ TravelPlanGPT Agent - Core Planning Logic
 import os
 import json
 import logging
+import asyncio
+import aiohttp
 from typing import List, Dict, Any
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain_openai import ChatOpenAI
@@ -29,13 +31,58 @@ from app.database import settings
 logger = logging.getLogger(__name__)
 
 
+class DirectLLMCaller:
+    """直接调用LLM API的类，绕过LangChain兼容性问题"""
+
+    def __init__(self, api_key: str, base_url: str, model: str, timeout: int = 180):
+        self.api_key = api_key
+        self.base_url = base_url
+        self.model = model
+        self.timeout = timeout
+
+    async def call(self, prompt: str, temperature: float = 0.7) -> str:
+        """直接调用LLM API并返回响应内容"""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+
+        data = {
+            "model": self.model,
+            "messages": [
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": temperature,
+            "max_tokens": 4096
+        }
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=data,
+                timeout=aiohttp.ClientTimeout(total=self.timeout)
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(f"LLM API error: {response.status} - {error_text}")
+
+                result = await response.json()
+                content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+                if not content:
+                    raise Exception("LLM returned empty content")
+
+                return content
+
+
 class TravelPlanningAgent:
     """AI旅行规划Agent"""
-    
+
     def __init__(self):
         # 优先使用新配置方式，如果未设置则使用旧方式（兼容）
         provider = settings.LLM_PROVIDER.lower() if settings.LLM_PROVIDER else ""
-        
+
         # 检查是否使用旧配置方式
         if settings.LLM_API_KEY and settings.LLM_OPENAI_BASE:
             # 使用旧配置方式（兼容原有配置）
@@ -43,20 +90,33 @@ class TravelPlanningAgent:
             base_url = settings.LLM_OPENAI_BASE
             model_name = settings.LLM_MODEL_NAME or "qwen3:8b"
             logger.info(f"使用旧配置方式，模型: {model_name}, URL: {base_url}")
+            self.use_direct_call = False
         elif provider == "nvidia":
-            # NVIDIA GLM API
+            # NVIDIA GLM API - 使用直接调用方式绕过LangChain兼容性问题
             if not settings.NVIDIA_API_KEY or settings.NVIDIA_API_KEY == "":
                 raise ValueError("NVIDIA_API_KEY未配置，请在.env文件中设置")
             api_key = settings.NVIDIA_API_KEY
             base_url = "https://integrate.api.nvidia.com/v1"
             model_name = settings.NVIDIA_MODEL
-            logger.info(f"使用NVIDIA GLM API，模型: {model_name}")
+            logger.info(f"使用NVIDIA GLM API（直接调用），模型: {model_name}")
+            self.use_direct_call = True
+            self.direct_caller = DirectLLMCaller(api_key, base_url, model_name, timeout=180)
+            # LangChain仍然初始化用于工具调用
+            self.llm = ChatOpenAI(
+                model=model_name,
+                temperature=0.7,
+                api_key=api_key,
+                base_url=base_url,
+                timeout=120,
+                max_retries=3
+            )
         elif provider == "ollama" or (not provider and not settings.LLM_API_KEY):
             # 本地Ollama（默认）
             api_key = "ollama"  # Ollama不需要真正的key
             base_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"
             model_name = settings.OLLAMA_MODEL
             logger.info(f"使用本地Ollama，模型: {model_name}, URL: {base_url}")
+            self.use_direct_call = False
         elif provider == "dashscope":
             # 阿里云DashScope (OpenAI兼容接口)
             if not settings.DASHSCOPE_API_KEY or settings.DASHSCOPE_API_KEY == "":
@@ -65,26 +125,40 @@ class TravelPlanningAgent:
             base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
             model_name = "qwen-plus"
             logger.info(f"使用阿里云DashScope，模型: {model_name}")
+            self.use_direct_call = True
+            self.direct_caller = DirectLLMCaller(api_key, base_url, model_name, timeout=180)
+            self.llm = ChatOpenAI(
+                model=model_name,
+                temperature=0.7,
+                api_key=api_key,
+                base_url=base_url,
+                timeout=120,
+                max_retries=3
+            )
         else:
             # 默认使用Ollama
             api_key = "ollama"
             base_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/v1"
             model_name = settings.OLLAMA_MODEL
             logger.info(f"使用默认配置（本地Ollama），模型: {model_name}, URL: {base_url}")
+            self.use_direct_call = False
 
-        self.llm = ChatOpenAI(
-            model=model_name,
-            temperature=0.7,
-            api_key=api_key,
-            base_url=base_url
-        )
-        
+        if not hasattr(self, 'use_direct_call') or not self.use_direct_call:
+            self.llm = ChatOpenAI(
+                model=model_name,
+                temperature=0.7,
+                api_key=api_key,
+                base_url=base_url,
+                timeout=120,
+                max_retries=3
+            )
+
         # 初始化工具
         self.tools = self._init_tools()
-        
+
         # 创建prompt模板
         self.prompt = self._create_prompt_template()
-        
+
         # 创建agent
         self.agent = create_openai_tools_agent(self.llm, self.tools, self.prompt)
         self.agent_executor = AgentExecutor(
@@ -406,9 +480,18 @@ class TravelPlanningAgent:
 请务必使用简体中文，不要使用繁体中文（如：台湾→台湾、餐厅→餐厅、景点→景点）。"""
 
             print("\n🤖 调用 LLM...")
-            response = await self.llm.ainvoke(detailed_prompt)
-            output = response.content if hasattr(response, 'content') else str(response)
-            
+
+            # 根据配置选择调用方式
+            if hasattr(self, 'use_direct_call') and self.use_direct_call:
+                # 使用直接调用方式（绕过LangChain兼容性问题）
+                print("使用直接API调用（NVIDIA/DashScope）...")
+                output = await self.direct_caller.call(detailed_prompt, temperature=0.7)
+            else:
+                # 使用LangChain调用
+                print("使用LangChain调用（Ollama）...")
+                response = await self.llm.ainvoke(detailed_prompt)
+                output = response.content if hasattr(response, 'content') else str(response)
+
             print(f"✅ LLM response received, length: {len(output)}")
             print(f"📝 Response preview (first 200 chars): {output[:200]}...")
             
