@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Plane, MapPin, Calendar, Users, DollarSign, Sparkles, LogIn, History, LogOut, User, Menu, X } from "lucide-react"
+import { Plane, MapPin, Calendar, Users, DollarSign, Sparkles, LogIn, History, LogOut, User, Menu, X, Utensils, Mountain, ShoppingBag, Theater, Leaf, Compass, Baby, Map } from "lucide-react"
 
 interface TravelFormData {
   agentName: string
@@ -27,7 +27,7 @@ const presetExamples = [
     days: 2,
     budget: "3000元",
     preferences: ["美食"],
-    icon: "🍜"
+    icon: "utensils"
   },
   {
     title: "成都周末户外放松",
@@ -35,7 +35,7 @@ const presetExamples = [
     days: 3,
     budget: "2500元",
     preferences: ["户外", "美食"],
-    icon: "🏔️"
+    icon: "mountain"
   },
   {
     title: "京都3天文化体验",
@@ -43,18 +43,18 @@ const presetExamples = [
     days: 3,
     budget: "5000元",
     preferences: ["文化", "购物"],
-    icon: "⛩️"
+    icon: "landmark"
   }
 ]
 
 const preferenceOptions = [
-  { label: "美食", value: "food", icon: "🍽️" },
-  { label: "户外", value: "outdoor", icon: "🏞️" },
-  { label: "购物", value: "shopping", icon: "🛍️" },
-  { label: "文化", value: "culture", icon: "🎭" },
-  { label: "放松", value: "relax", icon: "🧘" },
-  { label: "冒险", value: "adventure", icon: "🎢" },
-  { label: "亲子", value: "family", icon: "👨‍👩‍👧" },
+  { label: "美食", value: "food", icon: "Utensils" },
+  { label: "户外", value: "outdoor", icon: "Mountain" },
+  { label: "购物", value: "shopping", icon: "ShoppingBag" },
+  { label: "文化", value: "culture", icon: "Theater" },
+  { label: "放松", value: "relax", icon: "Leaf" },
+  { label: "冒险", value: "adventure", icon: "Compass" },
+  { label: "亲子", value: "family", icon: "Baby" },
 ]
 
 export default function HomePage() {
@@ -327,18 +327,26 @@ export default function HomePage() {
                   <div className="space-y-2">
                     <Label className="text-sm sm:text-base">偏好标签（多选）</Label>
                     <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-                      {preferenceOptions.map((pref) => (
-                        <Button
-                          key={pref.value}
-                          type="button"
-                          variant={formData.preferences.includes(pref.value) ? "default" : "outline"}
-                          className="justify-start text-xs sm:text-sm h-9 sm:h-10"
-                          onClick={() => handlePreferenceToggle(pref.value)}
-                        >
-                          <span className="mr-1 sm:mr-2">{pref.icon}</span>
-                          {pref.label}
-                        </Button>
-                      ))}
+                      {preferenceOptions.map((pref) => {
+                        const IconComponent = pref.icon === "Utensils" ? Utensils :
+                          pref.icon === "Mountain" ? Mountain :
+                          pref.icon === "ShoppingBag" ? ShoppingBag :
+                          pref.icon === "Theater" ? Theater :
+                          pref.icon === "Leaf" ? Leaf :
+                          pref.icon === "Compass" ? Compass : Baby;
+                        return (
+                          <Button
+                            key={pref.value}
+                            type="button"
+                            variant={formData.preferences.includes(pref.value) ? "default" : "outline"}
+                            className="justify-start text-xs sm:text-sm h-9 sm:h-10"
+                            onClick={() => handlePreferenceToggle(pref.value)}
+                          >
+                            <IconComponent className="w-4 h-4 mr-1 sm:mr-2" />
+                            {pref.label}
+                          </Button>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -376,22 +384,64 @@ export default function HomePage() {
             <div className="lg:hidden mt-4">
               <h3 className="text-base font-semibold px-2 mb-3">快速开始 ✨</h3>
               <div className="flex gap-3 overflow-x-auto pb-2 px-2 -mx-2 scrollbar-hide">
-                {presetExamples.map((preset, index) => (
+                {presetExamples.map((preset, index) => {
+                  const IconComponent = preset.icon === "utensils" ? Utensils :
+                    preset.icon === "mountain" ? Mountain : Landmark;
+                  return (
+                    <Card
+                      key={index}
+                      className="cursor-pointer hover:shadow-lg transition-all active:scale-[0.98] flex-shrink-0 w-[280px]"
+                      onClick={() => loadPreset(preset)}
+                    >
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-base flex items-center gap-2">
+                          <IconComponent className="w-5 h-5 text-primary" />
+                          {preset.title}
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="text-xs text-muted-foreground space-y-1">
+                        <p className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {preset.destination}</p>
+                        <p className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {preset.days}天</p>
+                        <p className="flex items-center gap-1"><DollarSign className="w-3 h-3" /> {preset.budget}</p>
+                        <div className="flex gap-1 flex-wrap mt-2">
+                          {preset.preferences.map(p => (
+                            <span key={p} className="px-2 py-0.5 bg-primary/10 rounded text-xs">
+                              {p}
+                            </span>
+                          ))}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            </div>
+            
+            {/* 桌面端：垂直卡片布局 */}
+            <div className="hidden lg:block space-y-3 sm:space-y-4">
+              <h3 className="text-base sm:text-lg font-semibold px-2 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-primary" />
+                快速开始
+              </h3>
+              {presetExamples.map((preset, index) => {
+                const IconComponent = preset.icon === "utensils" ? Utensils :
+                  preset.icon === "mountain" ? Mountain : Landmark;
+                return (
                   <Card
                     key={index}
-                    className="cursor-pointer hover:shadow-lg transition-all active:scale-[0.98] flex-shrink-0 w-[280px]"
+                    className="cursor-pointer hover:shadow-lg transition-all hover:scale-[1.02] active:scale-[0.98]"
                     onClick={() => loadPreset(preset)}
                   >
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base flex items-center gap-2">
-                        <span className="text-xl">{preset.icon}</span>
+                    <CardHeader className="pb-3">
+                      <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+                        <IconComponent className="w-5 h-5 sm:w-6 sm:h-6 text-primary" />
                         {preset.title}
                       </CardTitle>
                     </CardHeader>
-                    <CardContent className="text-xs text-muted-foreground space-y-1">
-                      <p>📍 {preset.destination}</p>
-                      <p>📅 {preset.days}天</p>
-                      <p>💰 {preset.budget}</p>
+                    <CardContent className="text-xs sm:text-sm text-muted-foreground space-y-1">
+                      <p className="flex items-center gap-1"><MapPin className="w-3 h-3" /> {preset.destination}</p>
+                      <p className="flex items-center gap-1"><Calendar className="w-3 h-3" /> {preset.days}天</p>
+                      <p className="flex items-center gap-1"><DollarSign className="w-3 h-3" /> {preset.budget}</p>
                       <div className="flex gap-1 flex-wrap mt-2">
                         {preset.preferences.map(p => (
                           <span key={p} className="px-2 py-0.5 bg-primary/10 rounded text-xs">
@@ -401,39 +451,8 @@ export default function HomePage() {
                       </div>
                     </CardContent>
                   </Card>
-                ))}
-              </div>
-            </div>
-            
-            {/* 桌面端：垂直卡片布局 */}
-            <div className="hidden lg:block space-y-3 sm:space-y-4">
-              <h3 className="text-base sm:text-lg font-semibold px-2">快速开始 ✨</h3>
-              {presetExamples.map((preset, index) => (
-                <Card
-                  key={index}
-                  className="cursor-pointer hover:shadow-lg transition-all hover:scale-[1.02] active:scale-[0.98]"
-                  onClick={() => loadPreset(preset)}
-                >
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-base sm:text-lg flex items-center gap-2">
-                      <span className="text-xl sm:text-2xl">{preset.icon}</span>
-                      {preset.title}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-xs sm:text-sm text-muted-foreground space-y-1">
-                    <p>📍 {preset.destination}</p>
-                    <p>📅 {preset.days}天</p>
-                    <p>💰 {preset.budget}</p>
-                    <div className="flex gap-1 flex-wrap mt-2">
-                      {preset.preferences.map(p => (
-                        <span key={p} className="px-2 py-0.5 bg-primary/10 rounded text-xs">
-                          {p}
-                        </span>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>

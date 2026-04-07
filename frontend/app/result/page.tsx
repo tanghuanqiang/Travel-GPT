@@ -31,6 +31,11 @@ import {
   Loader2,
   Heart,
   RefreshCw,
+  Gem,
+  Train,
+  CloudSun,
+  Backpack,
+  CalendarCheck,
 } from "lucide-react"
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts"
 import Image from "next/image"
@@ -637,7 +642,7 @@ function ResultPageContent() {
                 {itinerary.hiddenGems.map((gem, idx) => (
                   <div key={idx} className="p-3 sm:p-4 bg-white/50 dark:bg-gray-800/50 rounded-lg border-2 border-purple-200 dark:border-purple-800">
                     <div className="flex items-start gap-2 sm:gap-3">
-                      <span className="text-xl sm:text-2xl">💎</span>
+                      <Gem className="w-6 h-6 sm:w-8 sm:h-8 text-purple-600 flex-shrink-0" />
                       <div className="flex-1">
                         <h4 className="font-bold mb-1 text-sm sm:text-base">{gem.title}</h4>
                         <p className="text-xs sm:text-sm text-muted-foreground mb-2">{gem.description}</p>
@@ -661,19 +666,22 @@ function ResultPageContent() {
           <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
             <div>
               <h4 className="font-bold mb-2 text-sm sm:text-base flex items-center gap-2">
-                🚇 交通建议
+                <Train className="w-4 h-4 text-blue-500" />
+                交通建议
               </h4>
               <p className="text-xs sm:text-sm text-muted-foreground">{itinerary.practicalTips.transportation}</p>
             </div>
             <div>
               <h4 className="font-bold mb-2 text-sm sm:text-base flex items-center gap-2">
-                🌤️ 天气提示
+                <CloudSun className="w-4 h-4 text-yellow-500" />
+                天气提示
               </h4>
               <p className="text-xs sm:text-sm text-muted-foreground">{itinerary.practicalTips.weather}</p>
             </div>
             <div>
               <h4 className="font-bold mb-2 text-sm sm:text-base flex items-center gap-2">
-                🎒 打包清单
+                <Backpack className="w-4 h-4 text-orange-500" />
+                打包清单
               </h4>
               <ul className="text-xs sm:text-sm text-muted-foreground space-y-1">
                 {itinerary.practicalTips.packingList.map((item, idx) => (
@@ -683,7 +691,8 @@ function ResultPageContent() {
             </div>
             <div>
               <h4 className="font-bold mb-2 text-sm sm:text-base flex items-center gap-2">
-                📅 季节注意事项
+                <CalendarCheck className="w-4 h-4 text-green-500" />
+                季节注意事项
               </h4>
               <p className="text-xs sm:text-sm text-muted-foreground">{itinerary.practicalTips.seasonalNotes}</p>
             </div>
