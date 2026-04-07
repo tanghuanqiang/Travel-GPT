@@ -153,8 +153,8 @@ app.add_middleware(
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    print(f"Validation error: {exc.errors()}")
-    print(f"Body: {excel.body if hasattr(exc, 'body') else 'N/A'}")
+    logger.warning(f"Validation error: {exc.errors()}")
+    logger.warning(f"Body: {exc.body if hasattr(exc, 'body') else 'N/A'}")
     return JSONResponse(
         status_code=422,
         content={"detail": exc.errors(), "body": str(exc.body)},
@@ -745,7 +745,7 @@ async def get_user_history(
             "items": paginated_items
         }
     except Exception as e:
-        print(f"Error fetching history: {e}")
+        logger.error(f"Error fetching history: {e}")
         raise HTTPException(status_code=500, detail=f"获取历史记录失败: {str(e)}")
 
 

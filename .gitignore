@@ -1,0 +1,38 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+dist/
+build/
+*.egg-info/
+
+# Next.js / Frontend
+.next/
+out/
+node_modules/
+
+# Logs
+backend/logs/
+*.log
+
+# Data files
+backend/data/
+
+# OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Docker volumes (if any)
+docker_data/
