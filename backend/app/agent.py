@@ -34,14 +34,17 @@ logger = logging.getLogger(__name__)
 class DirectLLMCaller:
     """直接调用LLM API的类，绕过LangChain兼容性问题"""
 
-    def __init__(self, api_key: str, base_url: str, model: str, timeout: int = 180):
+    def __init__(self, api_key: str, base_url: str, model: str, timeout: int = 300, max_retries: int = 3):
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
         self.timeout = timeout
+        self.max_retries = max_retries
 
     async def call(self, prompt: str, temperature: float = 0.7) -> str:
-        """直接调用LLM API并返回响应内容"""
+        """直接调用LLM API并返回响应内容，支持重试机制"""
+        import time
+        
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -56,24 +59,99 @@ class DirectLLMCaller:
             "max_tokens": 4096
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{self.base_url}/chat/completions",
-                headers=headers,
-                json=data,
-                timeout=aiohttp.ClientTimeout(total=self.timeout)
-            ) as response:
-                if response.status != 200:
-                    error_text = await response.text()
-                    raise Exception(f"LLM API error: {response.status} - {error_text}")
+        last_error = None
+        
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
+                        f"{self.base_url}/chat/completions",
+                        headers=headers,
+                        json=data,
+                        timeout=aiohttp.ClientTimeout(total=self.timeout)
+                    ) as response:
+                        if response.status != 200:
+                            error_text = await response.text()
+                            error_msg = f"LLM API error: {response.status} - {error_text}"
+                            logger.error(f"[Attempt {attempt}/{self.max_retries}] {error_msg}")
+                            
+                            # 如果还有重试机会，等待后重试
+                            if attempt < self.max_retries:
+                                wait_time = 2 ** attempt  # 指数退避: 2, 4, 8秒
+                                logger.info(f"等待 {wait_time} 秒后重试...")
+                                await asyncio.sleep(wait_time)
+                                continue
+                            else:
+                                raise Exception(error_msg)
 
-                result = await response.json()
-                content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        result = await response.json()
+                        
+                        # 调试：打印完整响应结构
+                        logger.info(f"[Attempt {attempt}] API响应: {str(result)[:500]}")
+                        
+                        # 检查多种可能的响应格式
+                        content = None
+                        
+                        # 格式1: 标准OpenAI格式
+                        if "choices" in result and len(result["choices"]) > 0:
+                            choice = result["choices"][0]
+                            if isinstance(choice, dict):
+                                content = choice.get("message", {}).get("content")
+                            elif hasattr(choice, "message"):
+                                content = choice.message.content if hasattr(choice.message, "content") else None
+                        
+                        # 格式2: 直接content字段
+                        if content is None and "content" in result:
+                            content = result["content"]
+                        
+                        # 格式3: text字段
+                        if content is None and "text" in result:
+                            content = result["text"]
+                        
+                        if content and content.strip():
+                            logger.info(f"✅ 成功获取内容，长度: {len(content)}")
+                            return content
+                        
+                        # 内容为空但响应正常的情况
+                        error_msg = f"LLM returned empty content (attempt {attempt}/{self.max_retries}). Response: {str(result)[:500]}"
+                        logger.warning(error_msg)
+                        last_error = Exception(error_msg)
+                        
+                        # 如果还有重试机会
+                        if attempt < self.max_retries:
+                            wait_time = 2 ** attempt
+                            logger.info(f"内容为空，等待 {wait_time} 秒后重试...")
+                            await asyncio.sleep(wait_time)
+                        else:
+                            raise last_error
+                            
+            except asyncio.TimeoutError as e:
+                error_msg = f"LLM API timeout after {self.timeout}s (attempt {attempt}/{self.max_retries})"
+                logger.error(error_msg)
+                last_error = Exception(error_msg)
+                
+                if attempt < self.max_retries:
+                    wait_time = 2 ** attempt
+                    logger.info(f"超时，等待 {wait_time} 秒后重试...")
+                    await asyncio.sleep(wait_time)
+                    
+            except aiohttp.ClientError as e:
+                error_msg = f"LLM API connection error: {e} (attempt {attempt}/{self.max_retries})"
+                logger.error(error_msg)
+                last_error = Exception(error_msg)
+                
+                if attempt < self.max_retries:
+                    wait_time = 2 ** attempt
+                    logger.info(f"连接错误，等待 {wait_time} 秒后重试...")
+                    await asyncio.sleep(wait_time)
+                    
+            except Exception as e:
+                # 其他异常不重试，直接抛出
+                logger.error(f"Unexpected error: {e}")
+                raise
 
-                if not content:
-                    raise Exception("LLM returned empty content")
-
-                return content
+        # 所有重试都失败
+        raise last_error or Exception("LLM failed after all retries")
 
 
 class TravelPlanningAgent:
@@ -98,9 +176,9 @@ class TravelPlanningAgent:
             api_key = settings.NVIDIA_API_KEY
             base_url = "https://integrate.api.nvidia.com/v1"
             model_name = settings.NVIDIA_MODEL
-            logger.info(f"使用NVIDIA GLM API（直接调用），模型: {model_name}")
+            logger.info(f"使用NVIDIA GLM API（直接调用），模型: {model_name}，超时: 300秒，重试: 3次")
             self.use_direct_call = True
-            self.direct_caller = DirectLLMCaller(api_key, base_url, model_name, timeout=180)
+            self.direct_caller = DirectLLMCaller(api_key, base_url, model_name, timeout=300, max_retries=3)
             # LangChain仍然初始化用于工具调用
             self.llm = ChatOpenAI(
                 model=model_name,
@@ -124,9 +202,9 @@ class TravelPlanningAgent:
             api_key = settings.DASHSCOPE_API_KEY
             base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
             model_name = "qwen-plus"
-            logger.info(f"使用阿里云DashScope，模型: {model_name}")
+            logger.info(f"使用阿里云DashScope，模型: {model_name}，超时: 300秒，重试: 3次")
             self.use_direct_call = True
-            self.direct_caller = DirectLLMCaller(api_key, base_url, model_name, timeout=180)
+            self.direct_caller = DirectLLMCaller(api_key, base_url, model_name, timeout=300, max_retries=3)
             self.llm = ChatOpenAI(
                 model=model_name,
                 temperature=0.7,
