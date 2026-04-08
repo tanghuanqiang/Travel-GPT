@@ -43,8 +43,6 @@ class DirectLLMCaller:
 
     async def call(self, prompt: str, temperature: float = 0.7) -> str:
         """直接调用LLM API并返回响应内容，支持重试机制"""
-        import time
-        
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json"
@@ -53,14 +51,17 @@ class DirectLLMCaller:
         data = {
             "model": self.model,
             "messages": [
+                {"role": "system", "content": "你是一个专业的旅行规划助手，直接输出JSON格式结果，不要调用任何工具或函数。"},
                 {"role": "user", "content": prompt}
             ],
             "temperature": temperature,
-            "max_tokens": 4096
+            "max_tokens": 8192,
+            # 关键：显式禁用工具调用，防止模型返回tool_calls而非content
+            "tools": []
         }
 
         last_error = None
-        
+
         for attempt in range(1, self.max_retries + 1):
             try:
                 async with aiohttp.ClientSession() as session:
@@ -74,7 +75,7 @@ class DirectLLMCaller:
                             error_text = await response.text()
                             error_msg = f"LLM API error: {response.status} - {error_text}"
                             logger.error(f"[Attempt {attempt}/{self.max_retries}] {error_msg}")
-                            
+
                             # 如果还有重试机会，等待后重试
                             if attempt < self.max_retries:
                                 wait_time = 2 ** attempt  # 指数退避: 2, 4, 8秒
@@ -85,66 +86,88 @@ class DirectLLMCaller:
                                 raise Exception(error_msg)
 
                         result = await response.json()
-                        
+
                         # 调试：打印完整响应结构
-                        logger.info(f"[Attempt {attempt}] API响应: {str(result)[:500]}")
-                        
+                        logger.info(f"[Attempt {attempt}] API响应: {str(result)[:800]}")
+
                         # 检查多种可能的响应格式
                         content = None
-                        
+
                         # 格式1: 标准OpenAI格式
                         if "choices" in result and len(result["choices"]) > 0:
                             choice = result["choices"][0]
                             if isinstance(choice, dict):
-                                content = choice.get("message", {}).get("content")
+                                message = choice.get("message", {})
+
+                                # 优先获取 content
+                                content = message.get("content")
+
+                                # 如果 content 为空但存在 tool_calls，说明模型误触发了函数调用
+                                # 需要将 tool_calls 的内容提取出来
+                                if (not content or not content.strip()) and "tool_calls" in message:
+                                    tool_calls = message["tool_calls"]
+                                    logger.warning(f"[Attempt {attempt}] 模型返回了tool_calls而非content，尝试提取: {str(tool_calls)[:300]}")
+                                    # 从 tool_calls 的 function.arguments 中提取内容
+                                    for tc in tool_calls:
+                                        if isinstance(tc, dict):
+                                            func = tc.get("function", {})
+                                            args = func.get("arguments", "")
+                                            if args and args.strip():
+                                                content = args
+                                                logger.info(f"从tool_calls中提取到内容，长度: {len(content)}")
+                                                break
                             elif hasattr(choice, "message"):
                                 content = choice.message.content if hasattr(choice.message, "content") else None
-                        
+
                         # 格式2: 直接content字段
                         if content is None and "content" in result:
                             content = result["content"]
-                        
+
                         # 格式3: text字段
                         if content is None and "text" in result:
                             content = result["text"]
-                        
+
                         if content and content.strip():
                             logger.info(f"✅ 成功获取内容，长度: {len(content)}")
                             return content
-                        
-                        # 内容为空但响应正常的情况
+
+                        # 内容为空但响应正常的情况 - 尝试不带tools重试
                         error_msg = f"LLM returned empty content (attempt {attempt}/{self.max_retries}). Response: {str(result)[:500]}"
                         logger.warning(error_msg)
                         last_error = Exception(error_msg)
-                        
-                        # 如果还有重试机会
+
+                        # 如果还有重试机会，尝试去掉tools参数重试（某些API对空tools数组处理不一致）
                         if attempt < self.max_retries:
                             wait_time = 2 ** attempt
                             logger.info(f"内容为空，等待 {wait_time} 秒后重试...")
+                            # 第二次重试去掉tools参数
+                            if attempt == 1 and "tools" in data:
+                                del data["tools"]
+                                logger.info("下次重试将不带tools参数")
                             await asyncio.sleep(wait_time)
                         else:
                             raise last_error
-                            
+
             except asyncio.TimeoutError as e:
                 error_msg = f"LLM API timeout after {self.timeout}s (attempt {attempt}/{self.max_retries})"
                 logger.error(error_msg)
                 last_error = Exception(error_msg)
-                
+
                 if attempt < self.max_retries:
                     wait_time = 2 ** attempt
                     logger.info(f"超时，等待 {wait_time} 秒后重试...")
                     await asyncio.sleep(wait_time)
-                    
+
             except aiohttp.ClientError as e:
                 error_msg = f"LLM API connection error: {e} (attempt {attempt}/{self.max_retries})"
                 logger.error(error_msg)
                 last_error = Exception(error_msg)
-                
+
                 if attempt < self.max_retries:
                     wait_time = 2 ** attempt
                     logger.info(f"连接错误，等待 {wait_time} 秒后重试...")
                     await asyncio.sleep(wait_time)
-                    
+
             except Exception as e:
                 # 其他异常不重试，直接抛出
                 logger.error(f"Unexpected error: {e}")
@@ -479,7 +502,7 @@ class TravelPlanningAgent:
    - 景点门票占10-20%
    - 其他占10%
 
-请以 JSON 格式输出，严格遵循以下结构（注意：activities 中不要包含 images 字段）：
+请以 JSON 格式输出，严格遵循以下结构（注意：activities 中不要包含 images 字段，不要添加任何注释）：
 {{
   "overview": {{
     "totalBudget": {self._estimate_budget(request.budget, request.days, request.travelers)},
@@ -504,7 +527,6 @@ class TravelPlanningAgent:
           "cost": 50.0,
           "address": "区名+街道+门牌号（必须具体）",
           "reason": "推荐理由（50字左右）"
-          // 注意：不要添加 "images" 字段！系统会自动通过 Unsplash/Pexels API 添加真实照片
         }},
         {{
           "time": "12:00",
@@ -514,7 +536,6 @@ class TravelPlanningAgent:
           "cost": 120.0,
           "address": "具体餐厅地址",
           "reason": "推荐理由"
-          // 注意：不要添加 "images" 字段！
         }},
         {{
           "time": "14:30",
@@ -524,7 +545,6 @@ class TravelPlanningAgent:
           "cost": 0.0,
           "address": "具体地址",
           "reason": "推荐理由"
-          // 注意：不要添加 "images" 字段！
         }}
       ]
     }}
@@ -554,8 +574,11 @@ class TravelPlanningAgent:
   }}
 }}
 
-重要：只输出 JSON 数据，不要添加任何其他说明文字。确保 JSON 格式完全正确，可以被直接解析。
-请务必使用简体中文，不要使用繁体中文（如：台湾→台湾、餐厅→餐厅、景点→景点）。"""
+【重要提醒】：
+1. 输出纯JSON，不要包含任何注释（不要写 // 开头的注释）
+2. JSON中不要有尾部逗号
+3. 所有字符串必须用双引号
+4. 确保JSON格式完全正确，可以被直接解析"""
 
             print("\n🤖 调用 LLM...")
 
@@ -614,10 +637,36 @@ class TravelPlanningAgent:
                 print(f"3️⃣ 提取 JSON: 从位置 {start_idx} 到 {end_idx}")
                 text = text[start_idx:end_idx+1]
             
+            # 🆕 去除 JS 风格注释（LLM 可能在 JSON 中添加 // 注释）
+            import re
+            # 去除单行注释 // ... 但不影响 URL 中的 //
+            # 策略：只移除行尾的 // 注释（在 JSON 值的后面）
+            text = re.sub(r'(?<!:)//.*?$', '', text, flags=re.MULTILINE)
+            # 去除多余的尾部逗号（JSON标准不允许）
+            text = re.sub(r',\s*([}\]])', r'\1', text)
+            
+            print(f"4️⃣ 清理后 JSON 长度: {len(text)}")
+            
             # 尝试解析 JSON
-            print(f"4️⃣ 尝试解析 JSON, 长度: {len(text)}")
-            data = json.loads(text)
-            print(f"✅ JSON 解析成功！")
+            try:
+                data = json.loads(text)
+                print(f"✅ JSON 解析成功！")
+            except json.JSONDecodeError as e:
+                print(f"⚠️ 首次 JSON 解析失败: {e}")
+                print(f"   错误位置: line {e.lineno}, column {e.colno}, pos {e.pos}")
+                
+                # 🆕 尝试修复常见的 JSON 错误
+                fixed_text = self._try_fix_json(text, e)
+                if fixed_text:
+                    try:
+                        data = json.loads(fixed_text)
+                        print(f"✅ JSON 修复后解析成功！")
+                    except json.JSONDecodeError as e2:
+                        print(f"❌ JSON 修复后仍然失败: {e2}")
+                        print(f"问题文本 (前后200字符): ...{text[max(0,e.pos-200):e.pos+200]}...")
+                        raise Exception(f"Failed to parse LLM output as JSON: {e2}")
+                else:
+                    raise Exception(f"Failed to parse LLM output as JSON: {e}")
             
             # 验证必要字段
             if 'overview' not in data or 'dailyPlans' not in data:
@@ -663,6 +712,52 @@ class TravelPlanningAgent:
             import traceback
             traceback.print_exc()
             raise Exception(f"Failed to create TravelItinerary: {e}")
+    
+    def _try_fix_json(self, text: str, error: json.JSONDecodeError) -> str:
+        """尝试修复常见的 JSON 格式错误"""
+        import re
+        fixed = text
+        
+        # 修复1：去除所有 // 注释（更激进的方式）
+        if '//' in fixed:
+            # 逐行处理，保护 URL 中的 //
+            lines = fixed.split('\n')
+            cleaned_lines = []
+            for line in lines:
+                # 如果这一行包含 http:// 或 https://，只处理值后面的注释
+                if '://' in line:
+                    # 找到最后一个引号后的注释
+                    last_quote = line.rfind('"')
+                    if last_quote > 0 and '//' in line[last_quote:]:
+                        line = line[:line.index('//', last_quote)]
+                else:
+                    # 没有URL的行，安全移除//注释
+                    comment_idx = line.find('//')
+                    if comment_idx >= 0:
+                        line = line[:comment_idx]
+                cleaned_lines.append(line)
+            fixed = '\n'.join(cleaned_lines)
+            logger.info("修复1: 去除了 // 注释")
+        
+        # 修复2：去除尾部逗号
+        fixed = re.sub(r',\s*([}\]])', r'\1', fixed)
+        logger.info("修复2: 去除了尾部逗号")
+        
+        # 修复3：如果JSON被截断（缺少结尾的 }），尝试补全
+        open_braces = fixed.count('{') - fixed.count('}')
+        open_brackets = fixed.count('[') - fixed.count(']')
+        if open_braces > 0 or open_brackets > 0:
+            # 尝试在最后一个完整的元素后截断并补全
+            # 找到最后一个完整的 "key": value 对
+            last_complete = max(fixed.rfind('",'), fixed.rfind('"}'), fixed.rfind('" ]'))
+            if last_complete > 0:
+                fixed = fixed[:last_complete+1]
+                # 补全缺失的括号
+                fixed += ']' * open_brackets
+                fixed += '}' * open_braces
+                logger.info(f"修复3: 补全了 {open_brackets} 个 ] 和 {open_braces} 个 }}")
+        
+        return fixed if fixed != text else ""
     
 
     
