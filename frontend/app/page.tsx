@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Plane, MapPin, Calendar, Users, DollarSign, Sparkles, LogIn, History, LogOut, User, Menu, X, Utensils, Mountain, ShoppingBag, Theater, Leaf, Compass, Baby, Map } from "lucide-react"
+import { Plane, MapPin, Calendar, Users, DollarSign, Sparkles, LogIn, History, LogOut, User, Menu, X, Utensils, Mountain, Landmark, ShoppingBag, Theater, Leaf, Compass, Baby } from "lucide-react"
 
 interface TravelFormData {
   agentName: string
